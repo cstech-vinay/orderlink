@@ -39,8 +39,9 @@ Transform `orderlink.in` from a static coming-soon page into a functioning e-com
 18. **Automated database backups** — nightly pg_dump → encrypted → off-VPS storage
 19. FOMO + social-proof mechanics per §4.5 (activity popup, "selling fast" badge, first-order + exit-intent coupons, back-in-stock capture)
 20. **Salesforce integration** per §13 — one-way sync of customer + order data; all customer-facing emails sent from Salesforce; "your data secured by Salesforce — #1 CRM" as a trust-surface
-21. Docker container replacing current deployment, Traefik labels, DNS unchanged
-22. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
+21. **Additional trust surfaces** per §4.12 — footer trust-badge row, `/about` founder page, `/contact` support-SLA commitment, product-page review-distribution bar, "Need help deciding? WhatsApp us" prompt on product page
+22. Docker container replacing current deployment, Traefik labels, DNS unchanged
+23. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
 
 ### Explicitly out of scope (deferred to later phases)
 
@@ -776,7 +777,99 @@ Because we don't currently load any non-essential cookie, even the "Decline" cho
 - **Data Protection Officer:** Vinay Vernekar, Director — `hello@orderlink.in`, `+91 20 66897519` (listed in /contact + /privacy).
 - **Breach notification window:** 72 hours to Data Protection Board + affected users. Process documented internally.
 
-### 4.11 Admin — `/admin/orders`
+### 4.11 Additional trust surfaces
+
+Five cheap-to-ship touchpoints that elevate OrderLink from "looks legitimate" to "feels confidence-inspiring". All Phase 2a.
+
+#### 4.11.1 Footer trust-badge row
+
+A single horizontal row directly above the copyright line, showing infrastructure partners + legal identifiers as small monochrome labels (no colour logos that compete with the palette):
+
+```
+  Payments via Razorpay   ·   Delivered by Meesho Logistics
+  Data on Salesforce (#1 CRM)   ·   SSL secured
+  CIN U62013PN2025PTC241138   ·   GSTIN 27AAMCC6643G1ZF
+  Made in India   ·   Curated in Pune
+```
+
+- Styled as JetBrains Mono 0.72rem, ink-soft colour
+- Two-row layout on desktop, stacked on mobile
+- No external asset dependencies (text-only; no hot-linked logo PNGs that break)
+- Where allowed by trademark policy, a wordmark-only treatment (Razorpay's official brand guidelines permit this)
+
+#### 4.11.2 About / Founder page — `/about`
+
+Single-page editorial origin story; humanises the brand.
+
+**Structure:**
+- **Hero:** one-sentence mission statement ("We hand-pick things worth owning — and ship them with care")
+- **The story:** ~150 words — why OrderLink exists, what "curated" means to us, how we pick products (testing every SKU at home before listing)
+- **Photo of the founder** (you) in a workspace / Pune context, not corporate-stock
+- **Operating numbers** (bold transparency): "Based in Pune · Incorporated as CodeSierra Tech Pvt Ltd · 25 products across 5 categories · Ships via Meesho Logistics to 19,000+ pincodes"
+- **Contact micro-block:** WhatsApp + email, repeated at bottom for clickable warmth
+
+Tone: Kinfolk-editorial, not CEO-LinkedIn. Draft drafted by me during implementation, you review + approve before it goes live.
+
+#### 4.11.3 Support SLA on `/contact`
+
+Explicit published commitment, replaces vague "we'll get back to you":
+
+```
+  We respond to every WhatsApp message within
+  2 hours, Monday–Saturday, 10 AM – 7 PM IST.
+
+  Email replies within 24 hours (including weekends).
+
+  Orders placed before 3 PM IST dispatch the same
+  working day via Meesho.
+```
+
+Prominent on `/contact`, plus reiterated in order confirmation email + `/orders/[id]/thanks` page.
+
+Internal tracking: add `Response_Deadline__c` computed field on `Case` object in Salesforce (Phase 2b) to enforce; for 2a, manual discipline on the user's part.
+
+#### 4.11.4 Review-distribution bar on product page
+
+Under the star rating ("★ 4.0 · 42,170 happy customers at Meesho"), render a 5-row horizontal bar chart of the rating distribution:
+
+```
+    ★★★★★  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  58%
+    ★★★★   ▓▓▓▓▓▓▓▓               22%
+    ★★★    ▓▓▓▓                   12%
+    ★★     ▓▓                       5%
+    ★      ▓                        3%
+```
+
+Data sourced from Meesho's public rating distribution (we recorded it per-SKU during the Phase 2 research spreadsheet). Credited inline: *"Rating distribution from 42,170 Meesho reviews."*
+
+Visually: soft coral bars, JetBrains Mono for the numbers, Instrument Sans for labels. Total height ~120px; sits alongside the "Why you'll love it" bullets.
+
+#### 4.11.5 "Need help deciding?" WhatsApp prompt on product page
+
+Small line of copy immediately below the Buy Now button:
+
+```
+  Unsure which one's right for you?
+  [WhatsApp us →] — we'll help in minutes.
+```
+
+- Instrument Sans 0.88rem, ink-soft
+- Button inline, underline-only style (not another big CTA that competes with Buy Now)
+- Click → opens `wa.me/912066897519?text=Hi%20OrderLink%2C%20I'm%20looking%20at%20{product_title}%20and%20have%20a%20quick%20question`
+- The pre-filled message includes the product name so you land in the chat with context
+
+### 4.12 Phase 2a-late additions — ship within 2 weeks of launch
+
+Not strictly launch-blockers, but meaningful additions to queue for the first post-launch sprint:
+
+| Item | Gated by | Effort |
+|---|---|---|
+| **Instagram feed embed** on home page (6-tile grid) | Requires at least 6 OrderLink Instagram posts to look curated, not empty | 1 hour dev |
+| **"X orders delivered this month" counter** (real SF-queried number) | Only shown once count ≥ 100 to avoid looking thin | 30 min dev |
+
+Both are documented here so they don't get lost — just not gated to the launch cut.
+
+### 4.13 Admin — `/admin/orders`
 
 Protected by HTTP Basic Auth (username + password from env vars). Single-page table:
 
@@ -1228,7 +1321,12 @@ Phase 2a ships successfully when:
 20. **Salesforce sync**: both test orders (prepaid + POD) appear in the SF org as Person Account + Order + OrderItem within 60 seconds of order completion; retry succeeds after a simulated SF outage (turn off network, place order, restore network, job auto-retries)
 21. **Salesforce Flows fire**: customer receives order-confirmation email from SF (not from OrderLink) for both test orders; admin-triggered status change from `confirmed` → `shipped` in `/admin/orders` back-syncs to SF and fires the shipped-email Flow
 22. **Trust messaging visible** on checkout ("Your details stored on Salesforce…") and footer ("Customer care on Salesforce")
-23. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap
+23. **Footer trust-badge row** visible with Razorpay / Meesho / Salesforce / CIN / GSTIN / "Made in India · Curated in Pune" lines
+24. **`/about` page** live with founder story + photo + transparency block
+25. **`/contact` SLA commitment** visible ("2-hour WhatsApp response, 10 AM – 7 PM IST, M–S")
+26. **Review-distribution bar** rendered on Oil Dispenser product page with Meesho-sourced data attribution
+27. **"Need help? WhatsApp us"** prompt on product page opens wa.me with prefilled context
+28. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap, only on explicit user-authorised deploy (see deploy gate at top of spec)
 
 ## 12. Explicit non-goals
 
@@ -1643,6 +1741,13 @@ Captured here so scope doesn't creep into 2a and so you can see the sequence cle
 8. **Customer-initiated order cancellation** — within 1 hour of placing, before manual confirmation
 9. **Automated customer emails per status transition** — shipped notification, out-for-delivery, delivered with review request
 10. **Google Search Console verification + sitemap ping** — not ship-critical but an easy day-one SEO win we should schedule
+11. **Money-back guarantee (7-day, no-questions)** — bold trust play; published prominently on product + checkout pages; operationalised via `Case` object in SF
+12. **Delivery-date commitment** — "Delivery by {date} guaranteed, or ₹50 back" on product page; computed from pincode + Meesho SLA; auto-compensation workflow
+13. **Journal / blog at `/journal`** — editorial content hub for SEO + brand affinity; MDX-based, commits as content
+14. **WhatsApp broadcast opt-in** at checkout — `✓ Notify me on WhatsApp when new products drop (≤ 2/month)`; wire into SF as a custom Channel flag on Person Account
+15. **Google My Business listing + review request loop** — verify Eon Free Zone address in Google; automated WhatsApp prompt ~48h post-delivery asking for a Google review
+16. **Waitlist counter on Coming-Soon product cards** — `"Coming soon — 47 people waiting"` + email capture; drives pre-launch demand
+17. **PWA (Progressive Web App)** — installable to home screen, offline catalog cache, service worker for basic push
 
 ### Phase 2c — ops automation (~2–3 weeks)
 
