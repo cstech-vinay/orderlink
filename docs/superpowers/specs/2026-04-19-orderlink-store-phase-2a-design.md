@@ -656,8 +656,9 @@ Link to `/track?id=OL-2026-0001` (pre-fills order #) is included in every confir
 
 Single floating button, bottom-right of viewport on all pages except `/admin`.
 
-- Uses WhatsApp Business number `+91 90284 45131` (distinct from the `+91 20 66897519` landline used on policy pages / invoices)
-- Deep-link format: `https://wa.me/919028445131?text=Hi%20OrderLink` (pulled from `LEGAL.whatsappNumber`)
+- Uses the same `+91 20 66897519` number as support phone (single contact surface across site, invoices, and chat)
+- Deep-link format: `https://wa.me/912066897519?text=Hi%20OrderLink` (pulled from `LEGAL.whatsappNumber`)
+- Caveat: standard WhatsApp is tied to mobile SIMs. A landline number only works if enrolled in Meta's WhatsApp Business Platform (separate API onboarding). If the number isn't registered, the click-to-chat link will show "phone number not on WhatsApp". Swap `LEGAL.whatsappNumber` to a mobile number later to fix in one line.
 - Icon: standard WhatsApp logo, but tinted to coral-on-cream to fit the brand palette (not the usual lurid green)
 - Bubble size: 56px, 20px from edges
 - Does not appear on checkout (reduces drop-off mid-payment)
@@ -914,8 +915,11 @@ export const LEGAL = {
     country: "India",
   },
   supportEmail: "hello@orderlink.in",
-  supportPhone: "+91 20 66897519",       // landline — displayed on /contact, policy pages, invoices
-  whatsappNumber: "+919028445131",        // mobile — drives wa.me deep-link for floating widget (NO spaces, country-code prefixed)
+  supportPhone: "+91 20 66897519",       // displayed on /contact, policy pages, invoices
+  whatsappNumber: "+912066897519",       // same as supportPhone for Phase 2a; drives wa.me deep-link
+                                          // NOTE: landline WhatsApp requires Meta's WhatsApp Business Platform
+                                          // verification. If wa.me/912066897519 shows "not on WhatsApp", swap
+                                          // this line to a mobile number — zero code changes elsewhere.
   dpoName: "Vinay Vernekar",      // Data Protection Officer
   dpoDesignation: "Director",
   grievanceOfficerName: "Vinay Vernekar",  // Same per E-Commerce Rules 2020
