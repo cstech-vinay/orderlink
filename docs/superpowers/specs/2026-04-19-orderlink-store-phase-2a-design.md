@@ -570,14 +570,22 @@ All required for Razorpay KYC compliance and customer trust:
 | `/privacy` | Privacy Policy | What we collect, why, retention, sharing with Meesho for fulfilment, Razorpay for payments |
 | `/refund-policy` | Refund & Return | 7-day return window, condition requirements, refund timeline (7 working days to source payment method), advance-forfeiture rules |
 | `/shipping-policy` | Shipping Policy | Delivery included in price, 2–3 days, pincode coverage via Meesho network, tracking via Meesho SMS |
-| `/contact` | Contact Us | Email `hello@orderlink.in`, phone `+91 20 66897519`, registered address (CodeSierra) |
+| `/contact` | Contact Us | Email `hello@orderlink.in`, phone `+91 20 66897519`, CodeSierra Tech Pvt Ltd registered address, CIN |
 | `/logistics` | Logistics partnership | Explainer: why Meesho, what to expect (SMS source), delivery promise |
 
-**Legal entity + GSTIN:** OrderLink operates as a **trade name / brand of CodeSierra**, the user's existing registered firm. Invoices, policies, and Razorpay merchant account all reflect CodeSierra's legal name and GSTIN. Footers show:
+**Legal entity + GSTIN:** OrderLink operates as a **trade name / brand of CodeSierra Tech Private Limited** (the registered private limited company). Invoices, policies, and Razorpay merchant records all reflect the full legal name + CIN + GSTIN. Footers show:
 
-> **© 2026 OrderLink — a brand of CodeSierra · Made in India**
+> **© 2026 OrderLink — a brand of CodeSierra Tech Private Limited · Made in India**
+> **CIN:** `U62013PN2025PTC241138` · **GSTIN:** `27AAMCC6643G1ZF`
 
-GSTIN (from CodeSierra) printed on order confirmation emails and any invoice. See §10 item 5 for the amendment note.
+**Pvt Ltd compliance requirements (Companies Act 2013 §12(3)(c) + §40 Consumer Protection (E-Commerce) Rules 2020):**
+- **CIN** must appear on website (typically footer or contact page) and on every order invoice
+- **Full registered name** ("CodeSierra Tech Private Limited") must appear on every order invoice, confirmation email, and policy page
+- **Registered office address** in `/contact`
+- **Grievance officer name + contact** in `/contact` (E-Commerce Rules 2020 requirement — can default to the same mobile/email for small operations)
+- These apply regardless of GST status and are independent of the trade-name framing
+
+Placeholders in all six policy pages for CIN + address — single find-and-replace at launch once values are supplied.
 
 Drafted with Indian e-commerce boilerplate + OrderLink-specific details. All linked from footer. Privacy and Terms linked from checkout form.
 
@@ -717,12 +725,12 @@ Minimal but meaningful coverage:
 | # | Item | Assumption / status |
 |---|---|---|
 | 1 | Fulfilment model | **Meesho logistics partnership**, positioned as premium service. Confirmed. |
-| 2 | Razorpay account | **Already live** under CodeSierra. Keys supplied via `.env` at deploy time, not committed. Merchant name on Razorpay dashboard should list OrderLink as a brand (user action). |
+| 2 | Razorpay account | **Already live** under CodeSierra Tech Pvt Ltd. Keys supplied via `.env` at deploy time, not committed. Merchant name on Razorpay dashboard should list OrderLink as a brand / display name under the same legal merchant (user action — Razorpay Dashboard → Settings → Business Details → Add Brand). |
 | 3 | Oil Dispenser images | **User-provided.** 3–5 photos required before launch (front, side, detail, lifestyle). |
 | 4 | Shipping | **All-inclusive pricing — no shipping line ever shown.** Product price already covers delivery. ₹49 upfront advance on POD orders is positioned as booking/confirmation, not "shipping charge". |
-| 5 | GSTIN | **OrderLink operates as a trade name of CodeSierra.** Uses CodeSierra's existing GSTIN. Policies, invoices, Razorpay merchant name all show CodeSierra as legal entity + OrderLink as brand. **User action required**: amend CodeSierra's GST registration to add (a) additional trade name "OrderLink", (b) relevant HSN codes for retail goods (e.g. 7013 glassware / 8205 hand tools / etc. depending on SKUs), (c) additional place of business if applicable. Quick form-level amendment on the GST portal, typically approved in 7–15 days. |
+| 5 | GSTIN | **OrderLink operates as a trade name of CodeSierra Tech Private Limited.** Uses the company's existing GSTIN. Policies, invoices, Razorpay merchant records all show "CodeSierra Tech Private Limited" as legal entity + "OrderLink" as brand. **User action required**: amend the company's GST registration to add (a) additional trade name "OrderLink", (b) relevant HSN codes for retail goods (e.g. 7013 glassware / 8205 hand tools / etc. depending on SKUs), (c) additional place of business if storage/warehousing is separate. Form REG-14 amendment on the GST portal, typically approved in 7–15 days. |
 | 6 | Support contact | Phone `+91 20 66897519`, email `hello@orderlink.in`. Both placed in `/contact`, order emails, footer. |
-| 7 | Registered business address | CodeSierra's registered address — **not yet provided**. Placeholder in policy pages until supplied; one-line edit to swap in. |
+| 7 | Legal identifiers | CIN `U62013PN2025PTC241138`, GSTIN `27AAMCC6643G1ZF` — confirmed. **Still pending:** registered office address (Pune, per CIN) + grievance-officer designation (can default to user's name + `hello@orderlink.in` + `+91 20 66897519`). Will use a single-file `lib/legal.ts` constants module so final values land in one commit. |
 | 8 | Product renames | I'll propose curated titles for all 25 in implementation phase; user approves via PR review. |
 | 9 | Static content copy (bullets, descriptions, taglines) | I'll draft during implementation; user reviews. |
 | 10 | Non-refundable advance clause for refused POD | Legal gray area in India. The spec positions it as a "booking confirmation fee" rather than shipping (safer). User should run this by a CA or legal advisor for airtight positioning. Policy language drafted conservatively. |
