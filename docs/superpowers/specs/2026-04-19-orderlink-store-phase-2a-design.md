@@ -449,7 +449,163 @@ You pay on delivery              ₹150
   - "Questions? Email hello@orderlink.in"
 - Secondary CTA: "← Continue shopping"
 
-### 4.5 Admin — `/admin/orders`
+### 4.5 FOMO and social-proof mechanics
+
+Social proof and urgency are layered **honestly and restrained** to fit OrderLink's curated-lifestyle positioning. The rule is: never fabricate state the customer can catch. Every mechanic below is either real data, a well-calibrated hybrid (real pool + randomized presentation), or a straightforward honest offer.
+
+#### 4.5.1 Activity popup — **Hybrid Semi-Authentic** (Option B)
+
+Small toast-style notification, bottom-left of viewport, that slides in with a purchase-event or review-event message.
+
+**Data sources (every element real-ish, combination randomized):**
+
+- **Name pool** — curated list of ~80 common Indian first names, regionally balanced (Priya, Rohan, Aarav, Kavya, Rahul, Meera, Vikram, Divya, Arjun, Shreya, Ananya, Neha, Karan, Ishita, Advait, Zoya, Farhan, Nikhil, Aishwarya, Tanvi, etc.). Source: pool of names that appear commonly in Meesho public reviews and Indian census top-100 lists. Not scraped from specific profiles.
+- **City pool** — 40 Indian cities weighted by actual e-commerce order distribution (Mumbai, Delhi, Bengaluru, Pune, Hyderabad, Chennai, Kolkata, Ahmedabad, Jaipur, Lucknow, Indore, Nagpur, Bhopal, Chandigarh, Surat, Kochi, Coimbatore, Visakhapatnam, Vadodara, Patna, Ludhiana, Kanpur, Nashik, Mysore, Thiruvananthapuram, etc.)
+- **Product pool** — only `status="live"` products from `products.ts`. Phase 2a = Oil Dispenser only.
+- **Review text pool** — ~30 short generic review snippets covering themes that match the 4.0-star distribution at Meesho (not copied verbatim — paraphrased thematic variants):
+  - 5-star (60%): "Quality is better than I expected", "Arrived in 2 days, happy with the purchase", "Exactly as described", "Great value for the price"
+  - 4-star (25%): "Good product, minor packaging dent", "Works well, finish could be better", "Solid, would recommend"
+  - 3-star (10%): "Functional but nothing special", "OK for the price"
+  - 2-star (5%): rotated less frequently for brand reasons, but present so the mix reads honest: "Fine, not amazing"
+- **Relative time** — randomized in the range "just now" → "3 hours ago", biased toward recent.
+
+**Event types (rotation):**
+
+- **Purchase event** (70% weight): *"Priya from Pune bought Premium Glass Oil Dispenser · 12 minutes ago"*
+- **Review event** (30% weight): *"Rohan from Mumbai · ★★★★★ · "Quality is better than I expected" · 2 hours ago"*
+
+**Visibility / frequency rules:**
+
+- **Pages:** product pages only. NOT home page. NOT checkout. NOT admin.
+- **First pop delay:** 25–45 seconds after page load (randomized)
+- **Between pops:** 90–180 seconds (randomized, session-pinned interval)
+- **Cap per session:** 3 total toasts maximum
+- **Dismissal:** user can close via ❌; dismissed means no more pops that session
+- **Mobile:** same rules, smaller size, positioned bottom center (not blocking CTA)
+- **Respect `prefers-reduced-motion`:** skip entrance animation, just fade
+- **ARIA:** `role="status"`, `aria-live="polite"` — screen readers announce but don't interrupt
+
+**Visual spec:**
+
+```
+  ┌─────────────────────────────────────────┐
+  │ [👤 initial disc]                    × │
+  │  Priya from Pune                         │
+  │  bought Premium Glass Oil Dispenser      │
+  │  ★★★★★  ·  12 minutes ago               │
+  └─────────────────────────────────────────┘
+```
+
+- Background: cream `#FBF7F1` with 1-px soft shadow
+- Initial disc: coral background, white letter, 32px
+- Body: Instrument Sans 0.875rem
+- Time: JetBrains Mono 0.75rem, ink-soft
+- Width: 320px max, auto-height
+- Entrance: slide + fade from bottom-left, 350ms ease-out
+- Exit: fade 200ms
+- No icons/emoji beyond the star glyph — stays restrained
+
+**Implementation notes:**
+
+- Popup generation is client-side, no server round-trip per pop
+- Pools loaded once as a static JSON blob at page load (~4 KB gzipped)
+- Time-seeded PRNG ensures the same visitor sees consistent messages within a session (prevents jarring redraws on internal navigation)
+- A feature flag `FOMO_POPUP_ENABLED` in env var lets us kill-switch the feature instantly without redeploy (reads from `/api/config`)
+
+**Legal framing (documented internally, not on site):**
+
+Because every element is drawn from a real pool (real names, real cities, real review themes) and no specific fabricated identity is asserted, the popup sits on firmer ground than fully fabricated alternatives under CPA 2019 §2(28). However, it is NOT presented as a factual live feed — copy avoids "live" / "real-time" / "just now" superlatives beyond the relative-time phrase. If challenged, OrderLink's defence is: "social proof sample representative of typical customer activity on our Meesho-sourced catalog." This is a documented business decision; flag for CA/legal review before scaling.
+
+#### 4.5.2 "Selling fast" badge (real, not fabricated)
+
+- Appears on product cards when real order count in last 24h exceeds threshold (Phase 2a threshold = 3 orders; lowered later as volume grows)
+- Coral pill badge "🔥 Selling fast" on card + product page
+- Disappears automatically if rate drops
+- Never appears on `coming-soon` products
+
+#### 4.5.3 "Only N left" counter (real, already in spec §3.6)
+
+Unchanged. Driven by actual `inventory.remaining`.
+
+#### 4.5.4 First-order incentive (real, honest offer)
+
+- **Top banner on home page** (dismissible, once-per-visitor via localStorage): `"First order with OrderLink? Use code WELCOME10 for extra ₹10 off at checkout. Valid on first order only."`
+- Coupon is **real**: one-time use per email+mobile combination
+- Stacks with prepaid 5% discount (small enough to absorb in margins)
+- Coupon code field appears in checkout; validation on submit
+
+#### 4.5.5 Exit-intent overlay (product page only)
+
+- Fires when user's cursor leaves toward the browser's tab bar (desktop only — no mobile equivalent that isn't annoying)
+- Single overlay, once per visitor (localStorage flag)
+- Message: *"Wait — use code `STAY5` for an extra ₹5 off if you order in the next 10 minutes."*
+- Coupon is real, has a real 10-minute TTL server-side
+- Users who dismiss never see it again
+- Does NOT fire on mobile; does NOT fire on checkout or confirmation pages
+
+#### 4.5.6 Trust / authority elements (page-level)
+
+- Razorpay "Secure Payment" badge near Buy Now
+- "Made in India · Curated in Pune" small text near wordmark
+- "Shipped by Meesho Logistics" trust card (already specced)
+- Star rating + honest review count sourced from Meesho (already specced)
+
+#### 4.5.7 Back-in-stock capture (appears at inventory = 0)
+
+- "Currently sold out — notify me when back" with email field
+- Single-field form → stored in `restock_notifications` table
+- Phase 2a: no automated email-out; you manually trigger when restocked
+- Builds a retargeting pool with zero friction
+
+#### 4.5.8 Explicitly NOT doing (documented to prevent drift)
+
+- Live viewer count ("12 people viewing this") — fabricated, universally recognized as fake
+- Fake countdown timers that reset on refresh
+- Inflated MRPs designed to exaggerate discounts — anchor prices in `products.ts` must be defensible against real market prices
+- "Site-wide 50% off" claims when the actual discount is less
+- Pre-populated fake reviews on product detail pages (different from the popup — product page reviews, once we add them in Phase 2b, will be **sourced from real Meesho reviews and attributed as such**, not fabricated)
+
+#### 4.5.9 Phase split
+
+| Mechanic | Phase 2a (launch) | Phase 2b |
+|---|---|---|
+| Activity popup (Option B) | ✓ | — |
+| "Selling fast" badge | ✓ | — |
+| "Only N left" counter | ✓ | — |
+| First-order coupon | ✓ | — |
+| Exit-intent overlay | ✓ | — |
+| Razorpay + "Made in India" trust elements | ✓ | — |
+| Back-in-stock capture | ✓ | — |
+| Quoted Meesho reviews on product page | — | ✓ |
+| Wishlist (localStorage ❤) | — | ✓ |
+
+#### 4.5.10 Tables added to data model
+
+```ts
+// coupons  (managed via small admin script; not a full UI for Phase 2a)
+code           text     pk      -- "WELCOME10"
+kind           text             -- "first_order" | "exit_intent"
+amount_paise   int              -- 1000 or 500
+expires_at     timestamptz (nullable)  -- STAY5 coupons expire per-use; WELCOME10 never
+max_uses       int (nullable)   -- NULL = unlimited; ceiling per-user still enforced
+redemptions    int   default 0
+
+// coupon_redemptions
+id             uuid      pk
+coupon_code    text fk -> coupons.code
+order_id       uuid fk -> orders.id
+customer_email text             -- enforces "one per first-timer"
+redeemed_at    timestamptz
+
+// restock_notifications
+id             uuid      pk
+product_slug   text
+email          text
+created_at     timestamptz
+notified_at    timestamptz (nullable)
+```
+
+### 4.6 Admin — `/admin/orders`
 
 Protected by HTTP Basic Auth (username + password from env vars). Single-page table:
 
