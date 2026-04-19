@@ -13,7 +13,17 @@ export function Hero() {
           className="object-cover"
           sizes="100vw"
         />
-        <div className="absolute inset-0 bg-gradient-to-b from-cream/10 via-transparent to-cream" />
+        {/* Subtle left veil — the hero image already has negative space on
+            the left for the headline; this is just a gentle lift for contrast. */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(to right, rgba(251,247,241,0.55) 0%, rgba(251,247,241,0.25) 35%, rgba(251,247,241,0) 60%)",
+          }}
+        />
+        {/* Soft bottom fade into page cream */}
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-cream" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-24 md:py-32">
