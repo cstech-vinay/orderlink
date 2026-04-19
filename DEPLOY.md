@@ -62,22 +62,23 @@ docker compose down --rmi local
 
 ## Updating content
 
-1. Edit locally (`index.html`, `assets/optimized/*`, etc.)
-2. Rsync:
-   ```bash
-   # from project root on local machine
-   tar czf - \
-     --exclude='assets/bg.jpg' \
-     --exclude='assets/logo_horizontal.png' \
-     --exclude='assets/logo_standalone.png' \
-     index.html Dockerfile docker-compose.yml nginx.conf \
-     robots.txt sitemap.xml .dockerignore assets/ \
-     | ssh sfdcdevelopers-vps 'cd /root/orderlink && tar xzf -'
-   ```
-3. Rebuild:
-   ```bash
-   ssh sfdcdevelopers-vps 'cd /root/orderlink && docker compose up -d --build'
-   ```
+Source of truth: [github.com/cstech-vinay/orderlink](https://github.com/cstech-vinay/orderlink)
+
+**Local → GitHub:**
+```bash
+git add -A
+git commit -m "..."
+git push
+```
+The local repo uses `~/.ssh/id_ed25519_codesierra` (pinned via `core.sshCommand` in `.git/config`) to authenticate as `cstech-vinay`.
+
+**GitHub → VPS:**
+```bash
+ssh sfdcdevelopers-vps 'cd /root/orderlink && git pull && docker compose up -d --build'
+```
+VPS auth uses HTTPS with the stored PAT in `~/.git-credentials` — same mechanism all other sites on this VPS use.
+
+**Optional:** set up a GitHub Action to SSH in and run the pull+rebuild on every push to `main` for true CI/CD; skipped for now to keep the setup lean.
 
 ## File inventory
 
