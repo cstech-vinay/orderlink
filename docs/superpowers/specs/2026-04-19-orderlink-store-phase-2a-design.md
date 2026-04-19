@@ -5,6 +5,8 @@
 **Author:** Vinay
 **Scope:** First live commerce release — single product (Oil Dispenser), COD + Razorpay prepaid, storefront showing 25-product catalog with only Oil Dispenser active.
 
+> **⚠ Deploy gate:** No production deploy to `sfdcdevelopers-vps` — or to any public URL serving real traffic at `orderlink.in` — without explicit, in-the-moment user authorisation. All implementation work happens in local/branch builds. Even a staging subdomain requires user approval before provisioning.
+
 ---
 
 ## 1. Goal
@@ -1155,15 +1157,17 @@ Client + server-side instrumentation via `@sentry/nextjs`. Free tier (5,000 even
 - Second monitor: `https://orderlink.in/` every 15 minutes
 - Public status page optional (skip for 2a)
 
-### 8.7 Migration from Phase 1
+### 8.7 Migration from Phase 1 — human-gated
 
-1. Build and test Next.js container locally (where possible) and on VPS
-2. Spin up new container with different Traefik label (e.g., `staging.orderlink.in`) on VPS
-3. Seed Postgres, run migrations, seed inventory
-4. Verify Razorpay test mode end-to-end
-5. Switch Traefik labels: remove from old container, add to new
-6. Stop + remove old nginx-alpine static container
-7. Rollback plan: keep old image tagged; re-label in < 60s if critical bug
+**No VPS deploy happens without an explicit user instruction.** Implementation happens locally, tested locally, committed to `main`. The VPS stays on the Phase 1 static coming-soon page until the user says "deploy now."
+
+Planned order when the user authorises:
+
+1. Build Next.js container locally; run full local smoke-test against Razorpay test-mode, local Postgres, SF sandbox (or dev org) — user signs off
+2. **User authorises staging deploy** → spin up container behind `staging.orderlink.in` Traefik rule (new DNS subdomain needed). Real Razorpay test-mode keys, real SF dev-org sync. User exercises the flows.
+3. **User authorises production deploy** → swap Traefik labels so `orderlink.in` routes to the new container. Real Razorpay live keys (loaded from user-supplied `.env` at this exact moment, never committed). Old coming-soon container stops.
+4. Rollback plan: old coming-soon image stays tagged; re-label in < 60 s if critical bug.
+5. **Post-deploy** the user owns the go/no-go for any subsequent production push (hotfixes, updates). Every deploy is an explicit user approval — no automated CI deploys in 2a.
 
 ## 9. Testing
 
