@@ -656,8 +656,8 @@ Link to `/track?id=OL-2026-0001` (pre-fills order #) is included in every confir
 
 Single floating button, bottom-right of viewport on all pages except `/admin`.
 
-- Uses your WhatsApp Business number (same as `+91 20 66897519` or a dedicated mobile — **user to confirm which**)
-- Deep-link format: `https://wa.me/91XXXXXXXXXX?text=Hi%20OrderLink`
+- Uses WhatsApp Business number `+91 90284 45131` (distinct from the `+91 20 66897519` landline used on policy pages / invoices)
+- Deep-link format: `https://wa.me/919028445131?text=Hi%20OrderLink` (pulled from `LEGAL.whatsappNumber`)
 - Icon: standard WhatsApp logo, but tinted to coral-on-cream to fit the brand palette (not the usual lurid green)
 - Bubble size: 56px, 20px from edges
 - Does not appear on checkout (reduces drop-off mid-payment)
@@ -905,16 +905,17 @@ export const LEGAL = {
   cin: "U62013PN2025PTC241138",
   gstin: "27AAMCC6643G1ZF",
   panEmbedded: "AAMCC6643G",     // derived from GSTIN chars 3–12
-  registeredAddress: {           // TO BE FILLED by user
-    line1: "<TBD>",
-    line2: "<TBD>",
+  registeredAddress: {
+    line1: "Eon Free Zone",
+    line2: "Kharadi",
     city: "Pune",
     state: "Maharashtra",
-    pincode: "<TBD>",
+    pincode: "411014",
     country: "India",
   },
   supportEmail: "hello@orderlink.in",
-  supportPhone: "+91 20 66897519",
+  supportPhone: "+91 20 66897519",       // landline — displayed on /contact, policy pages, invoices
+  whatsappNumber: "+919028445131",        // mobile — drives wa.me deep-link for floating widget (NO spaces, country-code prefixed)
   dpoName: "Vinay Vernekar",      // Data Protection Officer
   dpoDesignation: "Director",
   grievanceOfficerName: "Vinay Vernekar",  // Same per E-Commerce Rules 2020
@@ -1100,7 +1101,7 @@ Minimal but meaningful coverage:
 | 4 | Shipping | **All-inclusive pricing — no shipping line ever shown.** Product price already covers delivery. ₹49 upfront advance on POD orders is positioned as booking/confirmation, not "shipping charge". |
 | 5 | GSTIN | **OrderLink operates as a trade name of CodeSierra Tech Private Limited.** Uses the company's existing GSTIN. Policies, invoices, Razorpay merchant records all show "CodeSierra Tech Private Limited" as legal entity + "OrderLink" as brand. **User action required**: amend the company's GST registration to add (a) additional trade name "OrderLink", (b) relevant HSN codes for retail goods (e.g. 7013 glassware / 8205 hand tools / etc. depending on SKUs), (c) additional place of business if storage/warehousing is separate. Form REG-14 amendment on the GST portal, typically approved in 7–15 days. |
 | 6 | Support contact | Phone `+91 20 66897519`, email `hello@orderlink.in`. Both placed in `/contact`, order emails, footer. |
-| 7 | Legal identifiers | CIN `U62013PN2025PTC241138`, GSTIN `27AAMCC6643G1ZF` — confirmed. **Still pending:** registered office address (Pune, per CIN) + grievance-officer designation (can default to user's name + `hello@orderlink.in` + `+91 20 66897519`). Will use a single-file `lib/legal.ts` constants module so final values land in one commit. |
+| 7 | Legal identifiers | **All confirmed.** CIN `U62013PN2025PTC241138`, GSTIN `27AAMCC6643G1ZF`, registered office `Eon Free Zone, Kharadi, Pune, Maharashtra 411014`, grievance + DPO = Vinay Vernekar (Director). Single source of truth in `src/lib/legal.ts`. |
 | 8 | Product renames | I'll propose curated titles for all 25 in implementation phase; user approves via PR review. |
 | 9 | Static content copy (bullets, descriptions, taglines) | I'll draft during implementation; user reviews. |
 | 10 | Non-refundable advance clause for refused POD | Legal gray area in India. The spec positions it as a "booking confirmation fee" rather than shipping (safer). User should run this by a CA or legal advisor for airtight positioning. Policy language drafted conservatively. |
