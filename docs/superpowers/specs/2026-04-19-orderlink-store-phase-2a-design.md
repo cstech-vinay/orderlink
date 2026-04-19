@@ -36,8 +36,9 @@ Transform `orderlink.in` from a static coming-soon page into a functioning e-com
 17. **UTM parameter capture** on every order (`utm_source`, `utm_medium`, `utm_campaign`, `referrer`, `landing_page`)
 18. **Automated database backups** — nightly pg_dump → encrypted → off-VPS storage
 19. FOMO + social-proof mechanics per §4.5 (activity popup, "selling fast" badge, first-order + exit-intent coupons, back-in-stock capture)
-20. Docker container replacing current deployment, Traefik labels, DNS unchanged
-21. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
+20. **Salesforce integration** per §13 — one-way sync of customer + order data; all customer-facing emails sent from Salesforce; "your data secured by Salesforce — #1 CRM" as a trust-surface
+21. Docker container replacing current deployment, Traefik labels, DNS unchanged
+22. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
 
 ### Explicitly out of scope (deferred to later phases)
 
@@ -194,6 +195,19 @@ razorpay_event_id text      unique
 event_type       text
 payload          jsonb
 processed_at     timestamptz
+
+// sf_sync_jobs  (Salesforce sync queue — see §13.4)
+id             uuid       pk
+order_id       uuid       fk -> orders.id
+job_kind       text       -- 'full_sync' | 'status_update' | 'delete_account'
+payload_json   jsonb
+status         text       -- 'pending' | 'running' | 'done' | 'failed'
+attempts       int        default 0
+last_error     text
+created_at     timestamptz default now()
+next_attempt_at timestamptz default now()
+sf_account_id  text       -- populated after first successful sync
+sf_order_id    text       -- populated after first successful sync
 ```
 
 Monetary values stored as `int` paise everywhere (no float arithmetic on money).
@@ -325,6 +339,7 @@ Editorial magazine aesthetic extending the coming-soon page. Single scrolling pa
 ├────────────────────────────────────────────────────────────┤
 │  Footer:                                                   │
 │    [logo] · Curated by OrderLink · Delivered by Meesho   │
+│    Customer care on Salesforce                             │
 │    Shop | Logistics | Contact                              │
 │    Terms · Privacy · Refund · Shipping                     │
 │    © 2026 OrderLink · Made in India · hello@orderlink.in  │
@@ -438,6 +453,9 @@ You pay on delivery                 —
 
 📱 You'll receive SMS updates from
    Meesho — our logistics partner.
+
+🔒 Your details stored on Salesforce,
+   the #1 CRM used by Fortune 500.
 
 [ PAY ₹189 SECURELY ]  (coral, full-width)
 ```
@@ -1018,16 +1036,47 @@ networks:
 ### 8.3 Environment variables (`.env`, never committed)
 
 ```
+# Core
 DATABASE_URL=postgres://orderlink_user:***@tech-blog-automation-postgres-1:5432/orderlink
+SITE_URL=https://orderlink.in
+
+# Razorpay
 RAZORPAY_KEY_ID=rzp_live_***
 RAZORPAY_KEY_SECRET=***
 RAZORPAY_WEBHOOK_SECRET=***
+
+# Email (admin alerts only; customer-facing emails go via Salesforce)
 RESEND_API_KEY=***
+
+# Admin
 ADMIN_USERNAME=vinay
-ADMIN_PASSWORD=***         # bcrypt hash, generated once
-ENCRYPTION_KEY=***         # for pgcrypto column encryption
+ADMIN_PASSWORD=***              # bcrypt hash, generated once
+
+# Encryption (column-level for PII)
+ENCRYPTION_KEY=***
+
+# Pincode cache
 INDIAPOST_CACHE_TTL=86400
-SITE_URL=https://orderlink.in
+
+# Sentry
+SENTRY_DSN=https://***@sentry.io/***
+SENTRY_AUTH_TOKEN=***           # build-time only, for source-map upload
+
+# Backup to Cloudflare R2
+R2_ACCESS_KEY_ID=***
+R2_SECRET_ACCESS_KEY=***
+R2_BUCKET=orderlink-backups
+R2_ENDPOINT=https://***.r2.cloudflarestorage.com
+BACKUP_GPG_RECIPIENT=ops@codesierra.tech
+HC_PING_URL=https://hc-ping.com/***
+
+# Salesforce — §13 integration
+SF_LOGIN_URL=https://codesierra.my.salesforce.com
+SF_CONSUMER_KEY=***             # Connected App consumer key
+SF_USERNAME=integration@codesierra.tech.orderlink
+SF_JWT_PRIVATE_KEY_PATH=/run/secrets/sf_jwt_private_key.pem
+SF_PERSON_ACCOUNT_RECORD_TYPE_ID=012XXXXXXXXXXXXXXX  # 18-char
+SF_SYNC_ENABLED=true            # kill-switch
 ```
 
 A `.env.example` committed with placeholder values serves as the canonical list.
@@ -1133,7 +1182,10 @@ Phase 2a ships successfully when:
 17. **Sentry** captures a test error, PII is stripped from the captured payload
 18. **Nightly backup** runs, pushes to R2, health-check endpoint pings; test restore to a scratch DB succeeds
 19. **UptimeRobot** monitor is green for 24 hours post-launch
-20. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap
+20. **Salesforce sync**: both test orders (prepaid + POD) appear in the SF org as Person Account + Order + OrderItem within 60 seconds of order completion; retry succeeds after a simulated SF outage (turn off network, place order, restore network, job auto-retries)
+21. **Salesforce Flows fire**: customer receives order-confirmation email from SF (not from OrderLink) for both test orders; admin-triggered status change from `confirmed` → `shipped` in `/admin/orders` back-syncs to SF and fires the shipped-email Flow
+22. **Trust messaging visible** on checkout ("Your details stored on Salesforce…") and footer ("Customer care on Salesforce")
+23. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap
 
 ## 12. Explicit non-goals
 
@@ -1144,7 +1196,331 @@ Phase 2a ships successfully when:
 - Mobile app — web responsive only
 - Analytics beyond UTM capture — defer to 2b
 
-## 13. Roadmap — what ships after 2a
+## 13. Salesforce integration — customer + CRM system of record
+
+**Intent:** OrderLink handles transactions, inventory, and payments. **Salesforce** owns the customer relationship, email communications, and post-purchase lifecycle. One-way sync on payment completion pushes every paid order into Salesforce, where Flows trigger the customer-facing emails.
+
+### 13.1 Why this matters (and why we surface it to customers)
+
+Salesforce is recognised as the world's #1 CRM platform (Gartner Magic Quadrant Leader, 11+ consecutive years) and is used by 150,000+ companies including a large share of the Fortune 500. We use this as a trust signal on OrderLink — small startup brands often struggle to convince customers their data is safe; "your details live on Salesforce, the same CRM used by Fortune 500 companies" converts that perception instantly.
+
+This is legitimate — we genuinely are a Salesforce customer — so no puffery risk under CPA 2019.
+
+### 13.2 Trust messaging placement
+
+Curated, not plastered. Three touchpoints:
+
+**Checkout page — trust strip above the Pay button:**
+```
+  🔒 Your details are stored on Salesforce,
+     the same CRM Fortune 500 companies trust.
+```
+Small, one line, Instrument Sans 0.82rem, ink-soft colour, Salesforce logo hidden (no logo use without permission — text reference only).
+
+**Footer micro-line** (alongside the Meesho delivery line):
+```
+Curated by OrderLink · Delivered by Meesho · Customer care on Salesforce
+```
+
+**Privacy policy** — a short section naming Salesforce as our data processor, linking to Salesforce's Trust & Compliance page (`trust.salesforce.com`), and stating data residency.
+
+**Purposefully NOT doing:**
+- Big Salesforce logos on the home page (would read as "we paid Salesforce" / off-brand for curated)
+- Home-page hero messaging leading with enterprise-tech signals
+- Claiming Salesforce "partnership" or "endorsement" — we're a customer, not a partner
+
+### 13.3 Schema — standard objects only
+
+| Object | Purpose | Record count (Phase 2a) |
+|---|---|---|
+| **Account (Person Account)** | 1 per customer | ~100s initially, scales linearly |
+| **Order** | 1 per OrderLink order | same as above |
+| **OrderItem** | 1 per line item (always 1 per order in 2a, no cart yet) | = Order count |
+| **Product2** | 25 products from `products.ts` | 25 |
+| **Pricebook2 / PricebookEntry** | Standard Pricebook + entry per product | 1 + 25 |
+| **Case** | Customer service (Phase 2b, not 2a) | 0 |
+
+#### 13.3.1 Account (Person Account) — customer
+
+Person Accounts merges standard Account + Contact into one B2C record. **Must be enabled in the org** before we integrate (see §13.6 prerequisites).
+
+Standard fields used directly:
+- `FirstName`, `LastName` — split from `customer_name` (on first space; fall back to last-name-only if single token)
+- `PersonEmail`, `PersonMobilePhone` (E.164, `+91XXXXXXXXXX`)
+- `PersonMailingStreet`, `PersonMailingCity`, `PersonMailingState`, `PersonMailingPostalCode`, `PersonMailingCountry`
+- `PersonHasOptedOutOfEmail` (SF flips this when customer unsubscribes; OrderLink respects it in its own emails too)
+
+Custom fields:
+
+| API Name | Type | Purpose |
+|---|---|---|
+| `OrderLink_Customer_Id__c` | Text(64), **External ID, Unique** | `SHA256(email.toLowerCase())`; primary upsert key — lets us avoid duplicates even if SF ID changes |
+| `Preferred_Contact_Channel__c` | Picklist: WhatsApp / SMS / Email | default WhatsApp for Indian customers |
+| `First_UTM_Source__c`, `First_UTM_Medium__c`, `First_UTM_Campaign__c` | Text | first-touch attribution; NEVER overwritten after first write |
+| `Last_UTM_Source__c`, `Last_UTM_Medium__c`, `Last_UTM_Campaign__c` | Text | updated on every new order |
+| `Total_Orders__c` | Roll-up COUNT of Orders | auto |
+| `Lifetime_Value_Paise__c` | Roll-up SUM(Order.Total_Paise__c) | auto |
+| `First_Order_At__c`, `Last_Order_At__c` | Date/Time | roll-up MIN / MAX |
+| `DPDP_Consent_Date__c` | Date/Time | from our cookie banner acceptance |
+| `Do_Not_WhatsApp__c` | Checkbox | separate from SF's email opt-out |
+| `Source_Platform__c` | Picklist | "OrderLink" (future multi-brand-proof) |
+
+#### 13.3.2 Order
+
+Standard fields:
+- `AccountId` (Person Account), `OrderNumber`, `Status`, `EffectiveDate`, `TotalAmount` (₹, not paise — SF Currency type)
+- `BillingStreet`, `BillingCity`, `BillingPostalCode` etc. on Order-level shipping (not just Account-level; orders can ship to different addresses later)
+
+Custom fields:
+
+| API Name | Type | Notes |
+|---|---|---|
+| `OrderLink_Order_Number__c` | Text(50), **External ID, Unique** | "OL-2026-0001" |
+| `OrderLink_Status__c` | Picklist: pending_advance, advance_paid, paid, confirmed, shipped, delivered, cancelled, refunded | |
+| `Total_Paise__c`, `Advance_Paise__c`, `Balance_Due_Paise__c` | Number(18,0) | paise-exact for reconciliation |
+| `Payment_Method__c` | Picklist: Prepaid / Pay-on-Delivery | |
+| `Razorpay_Order_Id__c`, `Razorpay_Payment_Id__c` | Text | support lookup |
+| `GST_Invoice_Number__c` | Text | "OL-INV-2026-000001" |
+| `GST_CGST_Paise__c`, `GST_SGST_Paise__c`, `GST_IGST_Paise__c`, `GST_Base_Paise__c` | Number | |
+| `Invoice_PDF_URL__c` | URL | served by OrderLink |
+| `Meesho_Tracking_Id__c`, `Meesho_Tracking_URL__c` | Text / URL | populated when admin marks shipped |
+| `UTM_Source__c`, `UTM_Medium__c`, `UTM_Campaign__c`, `UTM_Term__c`, `UTM_Content__c`, `Referrer__c`, `Landing_Page__c` | Text | per-order attribution |
+| `Coupon_Code__c`, `Coupon_Discount_Paise__c` | Text / Number | |
+| `Confirmed_At__c`, `Shipped_At__c`, `Delivered_At__c`, `Cancelled_At__c` | Date/Time | timeline for Flow triggers |
+| `Cancellation_Reason__c` | Long Text | |
+| `Customer_IP_Address__c`, `User_Agent__c` | Text | fraud / troubleshooting (short retention) |
+
+#### 13.3.3 OrderItem (Order Product)
+
+Standard fields: `OrderId`, `Product2Id`, `PricebookEntryId`, `Quantity`, `UnitPrice`.
+
+Custom fields:
+
+| API Name | Type |
+|---|---|
+| `HSN_Code__c` | Text(10) |
+| `GST_Rate_Percent__c` | Number(3,0) |
+| `Product_Slug__c` | Text(100) — OrderLink slug at time of purchase |
+
+#### 13.3.4 Product2
+
+Standard: `Name`, `ProductCode`, `Description`, `IsActive`.
+
+Custom:
+
+| API Name | Type |
+|---|---|
+| `OrderLink_Slug__c` | Text(100), **External ID, Unique** |
+| `Category__c` | Picklist: Kitchen / Beauty / Electronics / Fashion / Footwear |
+| `HSN_Code__c` | Text(10) |
+| `GST_Rate_Percent__c` | Number(3,0) |
+| `MRP_Paise__c`, `Price_Paise__c`, `Prepaid_Price_Paise__c` | Number(18,0) |
+| `Meesho_Source_URL__c` | URL |
+
+Product sync happens on deploy — a one-shot script reads `products.ts` and upserts all 25 into Salesforce via `OrderLink_Slug__c`. Re-run safe.
+
+### 13.4 Integration mechanics
+
+**Auth: OAuth 2.0 JWT Bearer flow** (server-to-server, no interactive login).
+
+1. Create Connected App in Salesforce:
+   - Enable OAuth, select "Use digital signatures"
+   - Upload public key certificate (we generate keypair in ops)
+   - Scopes: `api`, `refresh_token`, `offline_access`
+2. Authorise the app against a dedicated integration user (license seat required — one Salesforce user costs ~₹12k/yr on Enterprise Edition)
+3. OrderLink holds private key + consumer key in `.env`:
+   - `SF_LOGIN_URL` = `https://<mydomain>.my.salesforce.com`
+   - `SF_CONSUMER_KEY` = connected app consumer key
+   - `SF_USERNAME` = integration user's username
+   - `SF_JWT_PRIVATE_KEY` = PEM-formatted private key (or path to file)
+   - `SF_PERSON_ACCOUNT_RECORD_TYPE_ID` = 18-char Record Type ID
+4. `jsforce` library auto-renews access tokens; our code never deals with expiry
+
+**Sync queue** (Postgres-backed; no Redis needed for Phase 2a volume):
+
+```sql
+CREATE TABLE sf_sync_jobs (
+  id            uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id      uuid      NOT NULL REFERENCES orders(id),
+  payload_json  jsonb     NOT NULL,
+  status        text      NOT NULL DEFAULT 'pending',  -- pending, running, done, failed
+  attempts      int       NOT NULL DEFAULT 0,
+  last_error    text,
+  created_at    timestamptz DEFAULT now(),
+  next_attempt_at timestamptz DEFAULT now()
+);
+CREATE INDEX idx_sf_jobs_due ON sf_sync_jobs(status, next_attempt_at);
+```
+
+A 15-second interval background worker (Next.js custom server extension, OR a tiny sidecar container running `node workers/sf-sync.js`) picks up pending jobs:
+
+```
+for each job where status='pending' and next_attempt_at <= now():
+  mark status='running'
+  try:
+    syncOrderToSalesforce(order)
+    mark status='done'
+  catch err:
+    attempts++
+    if attempts >= 6: mark status='failed', email admin
+    else: schedule next_attempt_at = now() + backoff(attempts)
+                                     // 1m, 5m, 15m, 1h, 6h
+```
+
+**Enqueue trigger:** in `/api/orders/verify` (signature-verified Razorpay success) and `/api/razorpay/webhook` (fallback path), immediately after the order state transitions to `advance_paid` / `paid`, we INSERT a row into `sf_sync_jobs`. The customer-facing confirmation page renders instantly; SF sync happens async.
+
+**Sync function** (pseudocode; real version in `src/lib/salesforce/sync.ts`):
+
+```ts
+async function syncOrderToSalesforce(orderId: string) {
+  const conn = await getSalesforceConnection();
+  const order = await db.select().from(orders).where(eq(orders.id, orderId)).first();
+
+  // 1. Upsert Person Account by hashed email
+  const accountRes = await conn.sobject("Account").upsert({
+    OrderLink_Customer_Id__c: sha256(order.customer_email.toLowerCase()),
+    RecordTypeId:             env.SF_PERSON_ACCOUNT_RECORD_TYPE_ID,
+    FirstName:                splitName(order.customer_name).first,
+    LastName:                 splitName(order.customer_name).last,
+    PersonEmail:              order.customer_email,
+    PersonMobilePhone:        toE164(order.customer_mobile),
+    PersonMailingStreet:      [order.ship_line1, order.ship_line2].filter(Boolean).join(", "),
+    PersonMailingCity:        order.ship_city,
+    PersonMailingState:       order.ship_state,
+    PersonMailingPostalCode:  order.ship_pincode,
+    PersonMailingCountry:     "India",
+    Last_UTM_Source__c:       order.utm_source,
+    Last_UTM_Medium__c:       order.utm_medium,
+    Last_UTM_Campaign__c:     order.utm_campaign,
+    Source_Platform__c:       "OrderLink",
+    DPDP_Consent_Date__c:     order.created_at,  // implicit consent at checkout
+  }, "OrderLink_Customer_Id__c");
+  const accountId = accountRes.id ?? (await lookupByExternalId(conn, "Account", "OrderLink_Customer_Id__c", hash));
+
+  // 2. Upsert Order
+  const orderRes = await conn.sobject("Order").upsert({
+    OrderLink_Order_Number__c: order.order_number,
+    AccountId:                 accountId,
+    EffectiveDate:             order.created_at.toISOString(),
+    Status:                    "Draft",  // SF's default; we drive lifecycle via OrderLink_Status__c
+    OrderLink_Status__c:       order.status,
+    TotalAmount:               order.total_paise / 100,
+    Total_Paise__c:            order.total_paise,
+    Advance_Paise__c:          order.advance_paise,
+    Balance_Due_Paise__c:      order.balance_due_paise,
+    Payment_Method__c:         order.payment_method === "prepaid" ? "Prepaid" : "Pay-on-Delivery",
+    Razorpay_Order_Id__c:      order.razorpay_order_id,
+    Razorpay_Payment_Id__c:    order.razorpay_payment_id,
+    GST_Invoice_Number__c:     order.invoice_number,
+    GST_CGST_Paise__c:         order.gst_cgst_paise,
+    GST_SGST_Paise__c:         order.gst_sgst_paise,
+    GST_IGST_Paise__c:         order.gst_igst_paise,
+    GST_Base_Paise__c:         order.gst_base_paise,
+    Invoice_PDF_URL__c:        `https://orderlink.in/orders/${order.id}/invoice.pdf`,
+    UTM_Source__c:             order.utm_source,
+    UTM_Medium__c:             order.utm_medium,
+    UTM_Campaign__c:           order.utm_campaign,
+    Coupon_Code__c:            order.coupon_code,
+    Coupon_Discount_Paise__c:  order.coupon_discount_paise,
+    BillingStreet:             [order.ship_line1, order.ship_line2].filter(Boolean).join(", "),
+    BillingCity:               order.ship_city,
+    BillingState:              order.ship_state,
+    BillingPostalCode:         order.ship_pincode,
+    BillingCountry:            "India",
+  }, "OrderLink_Order_Number__c");
+
+  // 3. Replace OrderItems (idempotent re-sync)
+  const sfOrderId = orderRes.id ?? (await lookupByExternalId(conn, "Order", "OrderLink_Order_Number__c", order.order_number));
+  const existingItems = await conn.sobject("OrderItem").find({ OrderId: sfOrderId }, ["Id"]);
+  if (existingItems.length > 0) {
+    await conn.sobject("OrderItem").destroy(existingItems.map(i => i.Id));
+  }
+  const items = await db.select().from(order_items).where(eq(order_items.order_id, orderId));
+  await conn.sobject("OrderItem").create(items.map(item => ({
+    OrderId:           sfOrderId,
+    Product2Id:        await findProductIdBySlug(conn, item.product_slug),
+    PricebookEntryId:  await findPricebookEntryIdBySlug(conn, item.product_slug),
+    Quantity:          item.quantity,
+    UnitPrice:         item.unit_price_paise / 100,
+    HSN_Code__c:       productHSN(item.product_slug),
+    GST_Rate_Percent__c: productGSTRate(item.product_slug),
+    Product_Slug__c:   item.product_slug,
+  })));
+}
+```
+
+### 13.5 Email division of labour (replaces §7 for customer-facing emails)
+
+| Email | Sent by | Trigger |
+|---|---|---|
+| Admin "new order" alert → you | **OrderLink** (Resend) | synchronous, inside `/api/orders/verify` |
+| Customer order confirmation + invoice PDF | **Salesforce Flow** | new `Order` record in SF |
+| Customer "order confirmed, dispatching soon" | **Salesforce Flow** | when admin sets `Confirmed_At__c` via back-sync |
+| Customer "shipped, track here" | **Salesforce Flow** | when admin sets `Shipped_At__c` + `Meesho_Tracking_Id__c` |
+| Customer "delivered, how was it?" | **Salesforce Flow** | when admin sets `Delivered_At__c` (delay 24h via Scheduled Flow) |
+| Marketing / newsletter / abandoned-cart (Phase 2b) | **Salesforce Flow** or Marketing Cloud | Flows on Account / Order |
+| Restock notifications | **Salesforce Flow** (Phase 2b) | via sync of our `restock_notifications` table as SF Leads / Custom Object |
+| Razorpay payment receipts | **Razorpay** | automatic, out-of-band |
+
+Net result: our Next.js app sends exactly ONE email ever — the admin alert. Customer comms funnel through Salesforce, giving you one place to edit templates, track opens, manage unsubscribes, and build campaigns.
+
+### 13.6 Admin back-sync — updating Salesforce from `/admin/orders`
+
+When admin marks an order `shipped` (or any other status transition), the `/admin/orders` route PATCHes OrderLink's DB AND enqueues an SF-update job with just the changed fields (e.g., `Shipped_At__c`, `Meesho_Tracking_Id__c`). This triggers the downstream Flow in SF.
+
+Same queue, same retry mechanics. Keeps the SF-side in sync without needing bidirectional webhooks.
+
+### 13.7 Prerequisites (user-action items, not blocking spec)
+
+Assumed defaults documented; user to override if different:
+
+| # | Item | Default assumption | Action if different |
+|---|---|---|---|
+| 1 | Person Accounts enabled | assumed YES — if not, raise a case with SF Support, 1 business day |  |
+| 2 | Salesforce edition | assumed **Enterprise** or higher (has API access, Flows, Connected Apps without add-on) |  |
+| 3 | My Domain URL | placeholder `codesierra.my.salesforce.com` in `.env.example`; user supplies actual |  |
+| 4 | Email sending channel | assumed Salesforce native (Lightning Email + Flows + Email Templates) — no Marketing Cloud / Pardot |  |
+| 5 | Data residency | assumed **Hyperforce India** (cleanest for DPDP) — privacy policy written for that assumption |  |
+| 6 | SF email sender domain | `hello@orderlink.in` — requires DKIM + SPF records added at DNS level (Setup → Email → Email Relay / Deliverability) |  |
+
+### 13.8 Privacy policy updates
+
+Explicit addition to `/privacy`:
+
+> **Data processors we use:**
+> - **Salesforce** (`trust.salesforce.com`) — stores your customer profile, order history, and communication preferences. Data resides in Salesforce's Hyperforce India region. Used to send you order updates, respond to support queries, and (with consent) share occasional marketing. Salesforce is ISO 27001, SOC 2 Type II, and GDPR-certified, and acts as our processor under Section 11 of the DPDP Act 2023.
+> - **Razorpay** — processes payments. Only payment-related data (transaction ID, amount, method) flows to Razorpay; no shipping address.
+> - **Meesho** — our logistics partner. Receives shipping address + mobile only, for delivery.
+> - **Resend** — sends transactional admin alerts to our support inbox. No customer-identifying data.
+> - **Sentry** — error tracking. PII (name, email, mobile, address) stripped client-side before events leave your browser.
+
+### 13.9 Failure handling
+
+- **Salesforce outage / 5xx from SF API:** order completes normally for the customer; sync job retries with exponential backoff. You see a pending job in admin, no customer impact.
+- **Salesforce deleted / integration user deactivated:** same as above; jobs pile up in `pending` status; admin email alerts after 6 failed attempts across 6h total.
+- **Dirty data** (e.g., duplicate Person Accounts by email casing): covered by `OrderLink_Customer_Id__c = SHA256(email.toLowerCase())` — upsert always targets the same record.
+- **Order amendment** (rare — we might retroactively update a shipping address): manual via admin; back-sync updates SF.
+- **Customer requests data deletion (DPDP right to erasure):** we redact in OrderLink's DB + enqueue a delete job to SF that deletes the Person Account + cascades Orders. Documented in /privacy.
+
+### 13.10 Scope split
+
+| Item | Phase 2a | Phase 2b+ |
+|---|---|---|
+| Person Account + Order + OrderItem + Product2 sync | ✓ | — |
+| JWT OAuth, Connected App, integration user | ✓ | — |
+| Sync queue with retry/backoff | ✓ | — |
+| 3 SF Flows: new-order confirmation, shipped, delivered | ✓ | — |
+| Admin back-sync on status changes | ✓ | — |
+| Privacy policy mentions SF | ✓ | — |
+| Trust messaging on checkout + footer | ✓ | — |
+| `Case` object for support tickets | — | ✓ |
+| Marketing Cloud / Pardot migration | — | ✓ |
+| Abandoned-cart Flow | — | ✓ (when cart exists in 2b) |
+| Review-request Flow | — | ✓ |
+| Restock-notification → SF Lead sync | — | ✓ |
+| Customer 360 dashboards in SF | — | user-configurable any time |
+
+## 14. Roadmap — what ships after 2a
 
 Captured here so scope doesn't creep into 2a and so you can see the sequence cleanly. Rough order of value × effort; specifics get their own spec when that phase starts.
 
