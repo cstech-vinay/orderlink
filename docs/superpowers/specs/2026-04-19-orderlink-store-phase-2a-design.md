@@ -20,9 +20,9 @@ Transform `orderlink.in` from a static coming-soon page into a functioning e-com
 1. Replace static nginx container with a Next.js 15 application
 2. Home page with 25 product cards across 5 categories (Kitchen, Beauty & Personal Care, Consumer Electronics, Fashion — Women Kurtis, Women Footwear)
 3. Product detail page for Oil Dispenser (only) — others show "Coming Soon"
-4. Single-item checkout with two payment paths:
-   - **Prepaid** (full amount online via Razorpay, 5% discount on product)
-   - **Pay-on-Delivery** (₹49 shipping upfront via Razorpay + product amount in cash on delivery — filters abandoned COD orders)
+4. Single-item checkout with split pricing (item + ₹49 flat shipping, shipping non-refundable) and two payment paths:
+   - **Prepaid** — full amount online via Razorpay; 5% discount applied on item only (shipping stays full)
+   - **Pay-on-Delivery** — ₹49 shipping charged upfront via Razorpay (= the shipping fee, literally); item price in cash on delivery. Filters abandoned COD orders; upfront charge IS the non-refundable shipping.
 5. Order capture with pincode auto-lookup (India Post) + **serviceability check**
 6. Razorpay integration (order creation, checkout modal, server-side signature verification, webhook)
 7. Postgres schema for orders, order items, inventory tracking, coupons, restock notifications
@@ -263,30 +263,62 @@ export type Product = {
   categoryLabel: string;
   status: "live" | "coming-soon";
 
-  // Prices are all-inclusive — shipping is baked in, never shown as a line item.
-  mrpPaise: number;           // struck-through "anchor" price (what it "would" cost elsewhere)
-  pricePaise: number;         // what the customer pays under Pay-on-Delivery model
-  prepaidPricePaise: number;  // pricePaise × 0.95, rounded to nearest rupee
+  // Split pricing — item and shipping quoted separately, both displayed to customer.
+  // Shipping is a FLAT global constant (SHIPPING_PAISE), not per-product — for Phase 2a.
+  mrpPaise: number;               // struck-through anchor (item-level; not inclusive of shipping)
+  itemPricePaise: number;         // what customer pays for the item (POD: in cash on delivery)
+  itemPrepaidPricePaise: number;  // itemPricePaise × 0.95, rounded to nearest rupee
+                                  // (prepaid discount applies to item only, not shipping)
 
   images: { src: string; alt: string; width: number; height: number }[];
   shortSubtitle: string;
   bullets: string[];
   description: string;
   specs: { label: string; value: string }[];
+  hsnCode: string;                // GST HSN (e.g. "7013" glassware); item-level
+  gstRatePercent: number;         // e.g. 18 for 18%
   startingInventory: number;
   meeshoRating?: number;
   meeshoReviewCount?: number;
+  meeshoRatingDistribution?: { stars: 1 | 2 | 3 | 4 | 5; percent: number }[];  // for §4.11.4
   meeshoSourceUrl?: string;  // internal reference, not displayed
 };
 ```
 
-**Pay-on-Delivery advance** is a global constant, not per-product:
+**Global shipping constant (Phase 2a — flat, non-refundable):**
 
 ```ts
-export const COD_ADVANCE_PAISE = 4900;  // ₹49 upfront via Razorpay to confirm order
+export const SHIPPING_PAISE       = 4900;    // ₹49 flat all-India
+export const SHIPPING_HSN_CODE    = "9965";  // Goods Transport Agency services
+export const SHIPPING_GST_RATE    = 18;      // 18% on shipping
 ```
 
-Every Pay-on-Delivery order pays this ₹49 upfront (prepaid via Razorpay) and the remainder (`pricePaise - COD_ADVANCE_PAISE`) in cash on delivery.
+**Derived amounts per order:**
+
+```ts
+// For an order of product P with payment method M:
+//
+//   subtotal  = P.itemPrice + SHIPPING_PAISE         // shipping always charged
+//   discount  = (M === "prepaid")
+//                 ? (P.itemPrice - P.itemPrepaidPrice)  // 5% off item only
+//                 : 0
+//   total     = subtotal - discount
+//
+//   advance   = (M === "prepaid") ? total          // full amount via Razorpay
+//             : (M === "pay_on_delivery") ? SHIPPING_PAISE  // ₹49 via Razorpay (= shipping)
+//             : 0
+//
+//   balanceDue = total - advance
+//              = 0                                 // for Prepaid
+//              = P.itemPrice                       // for Pay-on-Delivery (cash on delivery)
+```
+
+**Refund mechanics:**
+- **Item refundable** on valid 7-day return (original condition, unused)
+- **Shipping is non-refundable by default** — covers Meesho Logistics' dispatch cost
+- **Exception 1:** damaged / wrong item received → full refund including shipping
+- **Exception 2: 15-day delivery guarantee.** If the order is not delivered within 15 days of placement, the ₹49 shipping is refunded in full (on top of the item refund, if the customer also chooses to cancel). Measured from order-placement timestamp to Meesho's first delivery attempt.
+- Refund path: via Razorpay for prepaid amount, via UPI transfer or bank credit for cash-paid portions (admin-triggered from `/admin/orders`)
 
 The 25 products are seeded from `Meesho_Top_Sellers_Report.xlsx`. I'll rename titles to fit the curated-lifestyle brand (e.g. "Oil Stoppers & Pourers" → "Premium Glass Oil Dispenser — 500ml") during implementation; renames are the first commit of Phase 2a.
 
@@ -321,7 +353,7 @@ Orders are sourced from Meesho's supplier network after we capture a customer or
 > You will receive:
 > • Order confirmation from OrderLink (this email)
 > • Shipping + tracking SMS from Meesho
-> • Delivery in 2–3 days
+> • Delivery in 3–8 days
 
 **Home page footer line:**
 
@@ -395,8 +427,8 @@ Editorial magazine aesthetic extending the coming-soon page. Single scrolling pa
 │ Premium Glass Oil Dispenser   │  Fraunces 600, 1.25rem
 │ 500ml · glass & wood cork     │  Instrument Sans 0.875rem, ink-soft
 │                               │
-│ ₹199  ̶₹̶2̶9̶9̶  ( 33% off )      │  price is all-inclusive
-│ Delivery included             │  small reassurance line
+│ ₹150  ̶₹̶2̶9̶9̶  ( 50% off item)   │  item price + struck-through MRP
+│ + ₹49 shipping (non-refundable)│  micro-line, ink-soft
 │ ★ 4.0 · 42,170 happy customers│  Instrument Sans 0.82rem
 │                               │
 │ ⏱ Only 9 left at this price  │  coral-tinted micro-card
@@ -422,32 +454,32 @@ Two-column above the fold; stacked on mobile.
   - Title + subtitle
   - Star rating + review count ("★ 4.0 · 42,170 happy customers at Meesho") — honestly cites the source
   - Price block:
-    - Selling price large, coral (`₹199`)
-    - MRP struck-through (`₹299`)
-    - Discount badge (`33% off`)
-    - Microcopy beneath: `Delivery included · No hidden fees`
+    - Item price large, coral (`₹150`) beside MRP struck-through (`₹299`) + discount badge (`50% off item`)
+    - Shipping line beneath: `+ ₹49 shipping · non-refundable` (ink-soft)
+    - Total strip: `Total ₹199` (Instrument Sans 1.05rem, bold)
   - **Payment method selector** (radio group, stacked):
 
     ```
-    ●  Prepaid — ₹189    SAVE 5%  (₹10 off)
-       Pay full amount online.
+    ●  Prepaid — ₹191    SAVE ₹8 on item
+       Item ₹142 + Shipping ₹49
+       Pay full amount online now.
 
-    ○  Pay-on-Delivery — ₹49 now + ₹150 on delivery
-       Pay ₹49 to confirm your order, rest in cash
-       when it arrives.
+    ○  Pay-on-Delivery — ₹199
+       Pay ₹49 shipping now (secures the order)
+       + ₹150 cash on delivery.
     ```
 
-    Prepaid pre-selected by default (nudges customer toward the preferred flow).
+    Prepaid pre-selected by default (nudges toward the preferred flow). Math beneath each option shows the split so customer understands exactly what they're paying where.
   - FOMO line: `⏱ Only 9 left at this price`
   - **Buy Now** button (coral, full-width), label reflects current selection:
-    - Prepaid: `Pay ₹189 securely`
-    - Pay-on-Delivery: `Pay ₹49 advance & confirm order`
+    - Prepaid: `Pay ₹191 securely`
+    - Pay-on-Delivery: `Pay ₹49 shipping & confirm`
   - Trust chips (stacked, each with small icon):
     - 🚚 Shipped by Meesho Logistics (links to `/logistics`)
-    - 📦 Delivery in 2–3 days
-    - 🔄 Easy 7-day returns
+    - 📦 Delivery in 3–8 days · **15-day guarantee or shipping refunded**
+    - 🔄 7-day return on item
     - 🔒 Secure payment via Razorpay
-  - Microcopy below Pay-on-Delivery option (when selected): "The ₹49 advance is non-refundable if you refuse delivery without reason, and counts toward your total if you accept."
+  - Microcopy below Pay-on-Delivery option (when selected): "The ₹49 shipping is paid upfront and is non-refundable on returns or refused deliveries. It covers Meesho Logistics' dispatch regardless of outcome."
 
 Below the fold:
 
@@ -475,49 +507,56 @@ Single page, two columns.
     - `● Prepaid — save 5%`
     - `○ Cash on Delivery`
 
-**Right column — sticky order summary:**
+**Right column — sticky order summary (Prepaid selected):**
 
 ```
-Premium Glass Oil Dispenser × 1
-                                   ₹199
-Prepaid discount (5%)             −₹10
-                                ──────
-Total                            ₹189
-Delivery included · no hidden fees
+Premium Glass Oil Dispenser       ₹150
+Shipping (non-refundable*)         ₹49
+                                 ─────
+Subtotal                         ₹199
+Prepaid discount (5% on item)     −₹8
+                                 ─────
+Total (Prepaid)                  ₹191
 
 ─── Payment split ───────────────────
-You pay now (Razorpay)           ₹189
+You pay now (Razorpay)           ₹191
 You pay on delivery                 —
 ─────────────────────────────────────
 
-📱 You'll receive SMS updates from
-   Meesho — our logistics partner.
+*Shipping refunded if order isn't
+ delivered within 15 days.
 
-🔒 Your details stored on Salesforce,
-   the #1 CRM used by Fortune 500.
+📱 SMS tracking from Meesho — our
+   logistics partner.
 
-[ PAY ₹189 SECURELY ]  (coral, full-width)
+🔒 Data on Salesforce, #1 CRM for
+   Fortune 500.
+
+[ PAY ₹191 SECURELY ]  (coral, full-width)
 ```
 
-When `Pay-on-Delivery` is selected the same panel shows:
+**When `Pay-on-Delivery` is selected:**
 
 ```
-Premium Glass Oil Dispenser × 1
-                                   ₹199
-                                ──────
+Premium Glass Oil Dispenser       ₹150
+Shipping (non-refundable*)         ₹49
+                                 ─────
 Total                            ₹199
-Delivery included · no hidden fees
 
 ─── Payment split ───────────────────
-You pay now (Razorpay)            ₹49
-You pay on delivery              ₹150
+You pay now (Razorpay)            ₹49   ← shipping
+You pay on delivery              ₹150   ← item in cash
 ─────────────────────────────────────
 
-🛡  Your ₹49 secures the order.
-   Refuse delivery without reason
-   and the advance is non-refundable.
+*Shipping refunded if order isn't
+ delivered within 15 days. Otherwise
+ non-refundable on returns / refused
+ deliveries — covers Meesho dispatch.
 
-[ PAY ₹49 ADVANCE & CONFIRM ]
+📱 SMS tracking from Meesho.
+🔒 Data on Salesforce.
+
+[ PAY ₹49 SHIPPING & CONFIRM ]
 ```
 
 ### 4.4 Post-purchase confirmation
@@ -530,7 +569,7 @@ You pay on delivery              ₹150
 - Shipping address summary
 - Next steps list:
   - "Expect SMS updates from Meesho within 24 hours"
-  - "Delivery in 2–3 days to {pincode}"
+  - "Delivery in 3–8 days to {pincode}"
   - "Questions? Email hello@orderlink.in"
 - Secondary CTA: "← Continue shopping"
 
@@ -730,7 +769,7 @@ When customer enters pincode on checkout:
    - If in whitelist → resolves to city/state via India Post API (cached 24 h)
    - If not in whitelist → returns `{ serviceable: false }`
 2. Inline response rendered below the field:
-   - **Serviceable:** `✓ We deliver to {city}, {state} in 2–3 days` (sage green)
+   - **Serviceable:** `✓ We deliver to {city}, {state} in 3–8 days` (sage green)
    - **Not serviceable:** `⚠ Sorry, we don't ship here yet. [Notify me when available]` (amber tone)
 3. Buy button disabled while pincode is invalid or unserviceable; re-enabled on serviceable pincode
 4. Unserviceable flow captures email → `restock_notifications` (reused table, with `product_slug='pincode:XXXXXX'` as the key)
@@ -988,8 +1027,8 @@ All required for Razorpay KYC compliance and customer trust:
 |---|---|---|
 | `/terms` | Terms of Service | Usage, ordering, pricing, liability limits, non-refundable ₹49 advance clause for refused POD deliveries |
 | `/privacy` | Privacy Policy | What we collect, why, retention, sharing with Meesho for fulfilment, Razorpay for payments |
-| `/refund-policy` | Refund & Return | 7-day return window, condition requirements, refund timeline (7 working days to source payment method), advance-forfeiture rules |
-| `/shipping-policy` | Shipping Policy | Delivery included in price, 2–3 days, pincode coverage via Meesho network, tracking via Meesho SMS |
+| `/refund-policy` | Refund & Return | 7-day return on item (original condition), shipping ₹49 non-refundable by default, full refund incl. shipping if damaged/wrong item OR if undelivered after 15 days of order placement, refund timeline (7 working days to source payment method) |
+| `/shipping-policy` | Shipping Policy | ₹49 flat all-India, non-refundable, 2–3 day SLA via Meesho Logistics, 15-day hard guarantee (shipping refunded if not delivered), pincode coverage, Meesho SMS tracking |
 | `/contact` | Contact Us | Email `hello@orderlink.in`, phone `+91 20 66897519`, CodeSierra Tech Pvt Ltd registered address, CIN |
 | `/logistics` | Logistics partnership | Explainer: why Meesho, what to expect (SMS source), delivery promise |
 
@@ -1025,11 +1064,13 @@ Drafted with Indian e-commerce boilerplate + OrderLink-specific details. All lin
 - Invoice number + invoice date
 - Customer: name, shipping address, (email/mobile optional)
 - Place of supply: customer's state (drives intra vs inter-state GST)
-- Product table: Description, HSN code, Qty, Unit price (taxable value), Taxable amount
-- Tax breakup:
-  - **Intra-state** (customer is in Maharashtra — same as us): CGST 9% + SGST 9%
-  - **Inter-state** (customer outside MH): IGST 18%
-  - Rates are placeholder — **actual rate depends on HSN code** per product (e.g., glassware 7013 attracts 18% GST; some kitchen items 12%). Implementation-time action: map each product slug to its HSN + GST rate.
+- Product table — **two line items minimum** (item + shipping):
+  - Line 1: Product description · HSN (e.g. 7013) · Qty · Unit price · Taxable value · GST rate (product-specific)
+  - Line 2: Shipping & Handling · HSN **9965** · Qty 1 · ₹49.00 · Taxable ₹41.53 · GST 18% (always)
+- Tax breakup (per line then summed):
+  - **Intra-state** (customer in Maharashtra — same as us): CGST + SGST at half the combined rate each
+  - **Inter-state** (customer outside MH): IGST at combined rate
+  - Rates per HSN — glassware 7013 = 18%, 9965 (shipping) = 18%, others mapped during implementation.
 - Total in INR, rounded per CGST Rules
 - Payment method + status (Paid / POD advance paid / Balance due on delivery)
 - Footer: "This is a computer-generated invoice and does not require a signature" + grievance redressal line with DPO contact
