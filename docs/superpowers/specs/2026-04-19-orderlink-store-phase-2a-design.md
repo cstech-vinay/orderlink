@@ -117,71 +117,118 @@ Transform `orderlink.in` from a static coming-soon page into a functioning e-com
 | `/api/razorpay/webhook` | `POST` async Razorpay webhook receiver | API route |
 | `/api/pincode/[code]` | `GET` pincode → city/state lookup (cached) | API route |
 
-### 3.4 Data model
+### 3.4 Data residency strategy — Salesforce as primary, Postgres as fallback
+
+**Principle:** customer PII + order detail records live in **Salesforce only**. Postgres holds operational metadata (inventory, coupons, invoice counters, webhook idempotency) and a **transient fallback queue** for payloads that couldn't reach Salesforce at the moment of payment.
+
+**Write path on successful payment:**
+
+```
+Razorpay verify/webhook
+    ↓
+1. Reserve inventory (atomic UPDATE in Postgres)
+2. Generate invoice number (Postgres SEQUENCE, gap-free)
+3. Insert thin "reference row" in orders_ref (no PII)
+4. Attempt Salesforce upsert (3-second timeout):
+     a. Upsert Person Account
+     b. Upsert Order + OrderItems
+   ↓
+   SUCCESS: mark orders_ref.sf_synced=true, store sf_ids,
+            fire admin email, render /orders/[id]/thanks
+   ↓
+   FAILURE: write full payload to pending_sf_sync (encrypted),
+            enqueue retry, fire admin email, render /orders/[id]/thanks
+   ↓
+5. Generate invoice PDF → filesystem → URL recorded
+   in SF Order (or queued update if SF down)
+```
+
+**Read path:**
+
+- **Customer `/track`** queries Salesforce primary. Falls back to `pending_sf_sync` if the record hasn't synced yet. If both miss, "we're processing — refresh in a minute" message (rare; only during a simultaneous SF outage + first page load).
+- **Admin `/admin/orders`** list — paginated over `orders_ref` (fast, always available). Drill-in fetches full details from SF on demand. Orders still pending sync are flagged with a ⚠ badge and show data from `pending_sf_sync`.
+- **Invoice PDFs** are generated once on successful SF write, stored on our filesystem, served via signed URL at `/orders/[id]/invoice.pdf`. Re-generated from SF on demand if the file is missing.
+
+**Why this shape:**
+
+| Concern | Handling |
+|---|---|
+| **Customer never sees SF failure** | Confirmation page renders either way; async retry handles sync |
+| **Gap-free invoice numbers** (CGST requirement) | Postgres `invoice_sequence` assigns number BEFORE SF attempt — monotonic even if SF fails |
+| **Inventory counter stays fast** (FOMO on every page view) | Postgres `inventory` table; SF never touched during product-page render |
+| **Razorpay webhook idempotency** | Postgres `webhook_events` stays authoritative; Razorpay can't afford to call SF synchronously |
+| **DPDP compliance** | PII in SF exclusively in steady state; `pending_sf_sync` holds PII only transiently, encrypted at rest, purged on successful sync |
+| **SF rate limits** (100k API calls/day on Enterprise) | Sync is 2–3 calls per order; easily covers 10k+ orders/day |
+
+### 3.4.1 Data model
 
 **Postgres tables (via Drizzle schemas):**
 
 ```ts
-// orders
-id            uuid        pk
-order_number  text        unique, human-friendly ("OL-2026-0001")
-status        text        enum: pending_advance, advance_paid, pending_payment,
-                                paid, confirmed, shipped, delivered,
-                                cancelled, refunded
-customer_name   text
-customer_email  text
-customer_mobile text
-ship_line1    text
-ship_line2    text (nullable)
-ship_landmark text (nullable)
-ship_pincode  text
-ship_city     text
-ship_state    text
-payment_method    text  enum: prepaid, pay_on_delivery
--- All monetary values in paise. Prices are all-inclusive (shipping baked in).
-list_price_paise    int    -- pricePaise at time of purchase
-discount_paise      int    -- prepaid 5% discount (0 for pay_on_delivery)
-total_paise         int    -- what customer owes in total
-advance_paise       int    -- portion paid online upfront
-                           --   = total_paise           (for prepaid)
-                           --   = COD_ADVANCE_PAISE     (for pay_on_delivery = 4900)
-balance_due_paise   int    -- remainder payable on delivery in cash
-                           --   = 0                     (for prepaid)
-                           --   = total - advance       (for pay_on_delivery)
-razorpay_order_id   text (nullable)
-razorpay_payment_id text (nullable)
-razorpay_signature  text (nullable)
-coupon_code         text (nullable, fk -> coupons.code)
-coupon_discount_paise int  default 0
--- GST invoice (generated on confirmation / advance_paid / paid)
-invoice_number      text (nullable, unique) -- "OL-INV-2026-000001"
-invoice_pdf_path    text (nullable)         -- S3/Postgres large-object ref or filesystem path
-gst_base_paise      int  default 0         -- total_paise − tax components
-gst_cgst_paise      int  default 0         -- intra-state only
-gst_sgst_paise      int  default 0         -- intra-state only
-gst_igst_paise      int  default 0         -- inter-state only (MH ship state ≠ ship_state)
--- Attribution
-utm_source     text (nullable)
-utm_medium     text (nullable)
-utm_campaign   text (nullable)
-utm_term       text (nullable)
-utm_content    text (nullable)
-referrer       text (nullable)
-landing_page   text (nullable)
--- Customer tracking
-track_key           text   -- last 4 digits of mobile, used in /track?id=...&code=XXXX
-notes               text (nullable, admin notes)
-created_at    timestamptz  default now()
-updated_at    timestamptz  default now()
+// orders_ref  — thin reference row, NO PII (admin list view, invoice lookup)
+id                uuid       pk
+order_number      text       unique, human-friendly ("OL-2026-0001")
+invoice_number    text       unique, "OL-INV-2026-000001" (assigned from invoice_sequence)
+status            text       enum: pending_advance, advance_paid, pending_payment,
+                                    paid, confirmed, shipped, delivered,
+                                    cancelled, refunded
+payment_method    text       enum: prepaid, pay_on_delivery
+total_paise       int        -- for reconciliation / list view
+advance_paise     int
+balance_due_paise int
+product_slug      text       -- for admin-list product name
+quantity          int        default 1
+-- Privacy-safe display helpers (partial values; not full PII)
+customer_first_name_initial  text  -- e.g. "P." from "Priya"
+customer_mobile_last4        text  -- e.g. "5131"
+ship_pincode      text       -- needed for admin routing; not strictly PII
+ship_state        text       -- for GST jurisdiction
+-- Reference back to Razorpay
+razorpay_order_id      text (nullable)
+razorpay_payment_id    text (nullable)
+-- Invoice artifact
+invoice_pdf_path       text (nullable)         -- local filesystem path
+-- Salesforce link
+sf_synced              boolean default false
+sf_account_id          text (nullable)         -- SF 18-char ID
+sf_order_id            text (nullable)         -- SF 18-char ID
+sf_last_sync_at        timestamptz (nullable)
+-- Minimal attribution (for admin-side analytics without full PII)
+utm_source             text (nullable)
+utm_medium             text (nullable)
+utm_campaign           text (nullable)
+-- Lifecycle
+track_key              text                    -- last 4 of mobile (hashed? plain is fine — not true PII)
+notes                  text (nullable, admin notes)
+created_at             timestamptz default now()
+updated_at             timestamptz default now()
 
-// order_items
-id          uuid      pk
-order_id    uuid      fk -> orders.id, cascade
-product_slug  text
-product_title text
-quantity    int       default 1
-unit_price_paise   int
-created_at  timestamptz
+// pending_sf_sync  — full payload queue; holds PII ONLY while sync is pending
+id                uuid       pk
+order_ref_id      uuid       fk -> orders_ref.id (cascade delete)
+payload_json      bytea      -- ENCRYPTED with ENCRYPTION_KEY (pgcrypto symmetric)
+                             --   full customer_name, email, mobile, address,
+                             --   full tax breakup, coupon, line items, full UTM
+                             --   raw webhook context
+job_kind          text       -- 'full_sync' | 'status_update' | 'delete_account'
+status            text       -- 'pending' | 'running' | 'done' | 'failed'
+attempts          int        default 0
+last_error        text
+sf_account_id     text (nullable)   -- populated after any partial success
+sf_order_id       text (nullable)
+created_at        timestamptz default now()
+next_attempt_at   timestamptz default now()
+-- Row is DELETED on successful full sync (to remove PII from Postgres)
+-- Rows older than 90 days with status='failed' are deleted via cron
+--   after a manual investigation window
+
+// invoice_sequence  — gap-free counter for GST invoice numbers (CGST Rule 46)
+-- Implemented as a Postgres SEQUENCE, not a table:
+CREATE SEQUENCE invoice_sequence START 1;
+-- Invoice number format: OL-INV-<YYYY>-<padded-nextval>
+
+-- NO full orders/order_items tables in Postgres in steady state.
+-- Source of truth for those is Salesforce.
 
 // inventory
 product_slug   text   pk
@@ -196,18 +243,7 @@ event_type       text
 payload          jsonb
 processed_at     timestamptz
 
-// sf_sync_jobs  (Salesforce sync queue — see §13.4)
-id             uuid       pk
-order_id       uuid       fk -> orders.id
-job_kind       text       -- 'full_sync' | 'status_update' | 'delete_account'
-payload_json   jsonb
-status         text       -- 'pending' | 'running' | 'done' | 'failed'
-attempts       int        default 0
-last_error     text
-created_at     timestamptz default now()
-next_attempt_at timestamptz default now()
-sf_account_id  text       -- populated after first successful sync
-sf_order_id    text       -- populated after first successful sync
+// sf_sync_jobs has been MERGED into pending_sf_sync above — removed.
 ```
 
 Monetary values stored as `int` paise everywhere (no float arithmetic on money).
@@ -1075,7 +1111,10 @@ SF_LOGIN_URL=https://codesierra.my.salesforce.com
 SF_CONSUMER_KEY=***             # Connected App consumer key
 SF_USERNAME=integration@codesierra.tech.orderlink
 SF_JWT_PRIVATE_KEY_PATH=/run/secrets/sf_jwt_private_key.pem
-SF_PERSON_ACCOUNT_RECORD_TYPE_ID=012XXXXXXXXXXXXXXX  # 18-char
+SF_PERSON_ACCOUNT_RECORD_TYPE_ID=012XXXXXXXXXXXXXXX  # OrderLink Customer RT (18-char)
+SF_ORDER_RECORD_TYPE_ID=012XXXXXXXXXXXXXXX           # OrderLink Order RT
+SF_PRODUCT_RECORD_TYPE_ID=012XXXXXXXXXXXXXXX         # OrderLink Product RT
+SF_EXTERNAL_ID_PREFIX=orderlink                      # brand prefix for external IDs (prevents cross-brand collision)
 SF_SYNC_ENABLED=true            # kill-switch
 ```
 
@@ -1229,7 +1268,71 @@ Curated by OrderLink · Delivered by Meesho · Customer care on Salesforce
 - Home-page hero messaging leading with enterprise-tech signals
 - Claiming Salesforce "partnership" or "endorsement" — we're a customer, not a partner
 
-### 13.3 Schema — standard objects only
+### 13.3 Brand isolation via Record Types
+
+**Context:** your SF org holds data from another firm's operations alongside OrderLink's. To keep OrderLink customers, orders, and products cleanly separated — including in reports, list views, sharing rules, and admin profile access — we use **Record Types**.
+
+#### Why Record Types (vs a custom field or separate org)
+
+| Approach | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Record Types** (recommended) | Standard SF pattern. Different page layouts per brand. Distinct picklists, sharing rules, profile access. Reports filter by RecordTypeId trivially. Data physically co-exists without bleed. | Small setup overhead (create RTs per object, assign profile access) | ✓ **Use this** |
+| Custom `Source_Platform__c` field only | Simple | Agents accidentally see the wrong brand's records in list views; reports need constant filters; weak separation | ✗ insufficient |
+| Separate SF org | Absolute isolation | Expensive (new license seats), duplicated admin, no shared customer-360 if same person buys from both brands | ✗ overkill |
+| Divisions (legacy Data Segmentation) | Works but Salesforce is deprecating | Not future-safe | ✗ |
+
+#### Record Types to create in the SF org
+
+| Object | Record Type developer name | Label | Page layout | Assigned to |
+|---|---|---|---|---|
+| `Account` (Person) | `OrderLink_Customer` | OrderLink Customer | `OrderLink Customer Layout` | OrderLink profile only |
+| `Account` (Person) | `<Other_Firm>_Customer` | Other Firm Customer | existing | Other firm's profile |
+| `Order` | `OrderLink_Order` | OrderLink Order | `OrderLink Order Layout` | OrderLink profile only |
+| `Order` | `<Other_Firm>_Order` | Other Firm Order | existing | Other firm's profile |
+| `Product2` | `OrderLink_Product` | OrderLink Product | `OrderLink Product Layout` | OrderLink profile only |
+| `Product2` | `<Other_Firm>_Product` | Other Firm Product | existing | Other firm's profile |
+
+(`OrderItem` doesn't support Record Types — it inherits context from its parent Order, which is already brand-scoped.)
+
+#### What changes in the sync layer
+
+- `SF_PERSON_ACCOUNT_RECORD_TYPE_ID` (already in `.env`) points to the **`OrderLink_Customer`** RT
+- New env vars:
+  - `SF_ORDER_RECORD_TYPE_ID` — OrderLink Order RT ID
+  - `SF_PRODUCT_RECORD_TYPE_ID` — OrderLink Product RT ID
+- Every create/upsert call includes the `RecordTypeId` — so OrderLink code physically cannot write to the other firm's records by mistake
+
+#### External-ID collision safety
+
+Person Account external ID uses brand-prefixed hashes so the same email can exist as two separate Person Accounts (one per brand) without a collision:
+
+```ts
+OrderLink_Customer_Id__c = `orderlink:${sha256(email.toLowerCase())}`
+```
+
+If the other firm adopts the same field, they'd use `otherfirm:<hash>`. Both rows coexist on the same object without upsert conflicts.
+
+(If you prefer to merge customers across brands — so one email = one Person Account — we'd skip the prefix. But the default is **isolate** because brands usually have different legal bases for processing personal data, and isolation is easier to audit. Reconsider in 2b if you want a unified customer identity.)
+
+#### Access control
+
+- **Admin profile** (you): access to both Record Types
+- **OrderLink-ops profile** (future team hires for the OrderLink brand): access to `OrderLink_*` RTs only
+- **Other-firm profile**: access to `<Other_Firm>_*` RTs only
+- Set via `Profile → Record Type Settings` or Permission Sets
+
+The integration user (used by OrderLink's JWT sync) is granted **OrderLink Record Types only** — another hard safety boundary.
+
+#### List views + reports
+
+Pre-build three saved list views per relevant object:
+- "OrderLink — All Customers" (filter: RecordType = OrderLink_Customer)
+- "OrderLink — Recent Orders (30d)"
+- "OrderLink — Revenue by Campaign" (grouped by UTM_Campaign__c)
+
+The team's default home tabs can surface these for immediate brand-scoped views.
+
+### 13.4 Schema — standard objects only
 
 | Object | Purpose | Record count (Phase 2a) |
 |---|---|---|
@@ -1254,7 +1357,7 @@ Custom fields:
 
 | API Name | Type | Purpose |
 |---|---|---|
-| `OrderLink_Customer_Id__c` | Text(64), **External ID, Unique** | `SHA256(email.toLowerCase())`; primary upsert key — lets us avoid duplicates even if SF ID changes |
+| `OrderLink_Customer_Id__c` | Text(80), **External ID, Unique** | `"orderlink:" + SHA256(email.toLowerCase())`; brand-prefixed so the same email can exist under multiple brands without collision (§13.3) |
 | `Preferred_Contact_Channel__c` | Picklist: WhatsApp / SMS / Email | default WhatsApp for Indian customers |
 | `First_UTM_Source__c`, `First_UTM_Medium__c`, `First_UTM_Campaign__c` | Text | first-touch attribution; NEVER overwritten after first write |
 | `Last_UTM_Source__c`, `Last_UTM_Medium__c`, `Last_UTM_Campaign__c` | Text | updated on every new order |
@@ -1319,7 +1422,7 @@ Custom:
 
 Product sync happens on deploy — a one-shot script reads `products.ts` and upserts all 25 into Salesforce via `OrderLink_Slug__c`. Re-run safe.
 
-### 13.4 Integration mechanics
+### 13.5 Integration mechanics
 
 **Auth: OAuth 2.0 JWT Bearer flow** (server-to-server, no interactive login).
 
@@ -1376,9 +1479,10 @@ async function syncOrderToSalesforce(orderId: string) {
   const conn = await getSalesforceConnection();
   const order = await db.select().from(orders).where(eq(orders.id, orderId)).first();
 
-  // 1. Upsert Person Account by hashed email
+  // 1. Upsert Person Account by brand-prefixed hashed email
+  const externalId = `${env.SF_EXTERNAL_ID_PREFIX}:${sha256(order.customer_email.toLowerCase())}`;
   const accountRes = await conn.sobject("Account").upsert({
-    OrderLink_Customer_Id__c: sha256(order.customer_email.toLowerCase()),
+    OrderLink_Customer_Id__c: externalId,              // "orderlink:<hash>"
     RecordTypeId:             env.SF_PERSON_ACCOUNT_RECORD_TYPE_ID,
     FirstName:                splitName(order.customer_name).first,
     LastName:                 splitName(order.customer_name).last,
@@ -1400,6 +1504,7 @@ async function syncOrderToSalesforce(orderId: string) {
   // 2. Upsert Order
   const orderRes = await conn.sobject("Order").upsert({
     OrderLink_Order_Number__c: order.order_number,
+    RecordTypeId:              env.SF_ORDER_RECORD_TYPE_ID,
     AccountId:                 accountId,
     EffectiveDate:             order.created_at.toISOString(),
     Status:                    "Draft",  // SF's default; we drive lifecycle via OrderLink_Status__c
@@ -1449,7 +1554,7 @@ async function syncOrderToSalesforce(orderId: string) {
 }
 ```
 
-### 13.5 Email division of labour (replaces §7 for customer-facing emails)
+### 13.6 Email division of labour (replaces §7 for customer-facing emails)
 
 | Email | Sent by | Trigger |
 |---|---|---|
@@ -1464,26 +1569,24 @@ async function syncOrderToSalesforce(orderId: string) {
 
 Net result: our Next.js app sends exactly ONE email ever — the admin alert. Customer comms funnel through Salesforce, giving you one place to edit templates, track opens, manage unsubscribes, and build campaigns.
 
-### 13.6 Admin back-sync — updating Salesforce from `/admin/orders`
+### 13.7 Admin back-sync — updating Salesforce from `/admin/orders`
 
 When admin marks an order `shipped` (or any other status transition), the `/admin/orders` route PATCHes OrderLink's DB AND enqueues an SF-update job with just the changed fields (e.g., `Shipped_At__c`, `Meesho_Tracking_Id__c`). This triggers the downstream Flow in SF.
 
 Same queue, same retry mechanics. Keeps the SF-side in sync without needing bidirectional webhooks.
 
-### 13.7 Prerequisites (user-action items, not blocking spec)
+### 13.8 Prerequisites — all confirmed
 
-Assumed defaults documented; user to override if different:
+| # | Item | Status |
+|---|---|---|
+| 1 | Person Accounts enabled in org | ✓ Confirmed |
+| 2 | Salesforce edition | ✓ **Enterprise** (API + Flows + Connected Apps all native) |
+| 3 | My Domain URL | ✓ `codesierra.my.salesforce.com` (user-confirmed) |
+| 4 | Email sending channel | ✓ **Salesforce native** (Lightning Email + Flows + Email Templates). Marketing Cloud migration possible in 2b if needed. |
+| 5 | Data residency | ✓ **Hyperforce India** — DPDP-clean, privacy policy language accurate |
+| 6 | SF email sender (`hello@orderlink.in`) | ✓ User can configure org-wide email address. Implementation includes: (a) adding `hello@orderlink.in` as an Organization-Wide Email Address in SF Setup, (b) SPF record at DNS: `v=spf1 include:_spf.salesforce.com ~all`, (c) DKIM enable + TXT record, (d) From-address on all templates set to this address. |
 
-| # | Item | Default assumption | Action if different |
-|---|---|---|---|
-| 1 | Person Accounts enabled | assumed YES — if not, raise a case with SF Support, 1 business day |  |
-| 2 | Salesforce edition | assumed **Enterprise** or higher (has API access, Flows, Connected Apps without add-on) |  |
-| 3 | My Domain URL | placeholder `codesierra.my.salesforce.com` in `.env.example`; user supplies actual |  |
-| 4 | Email sending channel | assumed Salesforce native (Lightning Email + Flows + Email Templates) — no Marketing Cloud / Pardot |  |
-| 5 | Data residency | assumed **Hyperforce India** (cleanest for DPDP) — privacy policy written for that assumption |  |
-| 6 | SF email sender domain | `hello@orderlink.in` — requires DKIM + SPF records added at DNS level (Setup → Email → Email Relay / Deliverability) |  |
-
-### 13.8 Privacy policy updates
+### 13.9 Privacy policy updates
 
 Explicit addition to `/privacy`:
 
@@ -1494,7 +1597,7 @@ Explicit addition to `/privacy`:
 > - **Resend** — sends transactional admin alerts to our support inbox. No customer-identifying data.
 > - **Sentry** — error tracking. PII (name, email, mobile, address) stripped client-side before events leave your browser.
 
-### 13.9 Failure handling
+### 13.10 Failure handling
 
 - **Salesforce outage / 5xx from SF API:** order completes normally for the customer; sync job retries with exponential backoff. You see a pending job in admin, no customer impact.
 - **Salesforce deleted / integration user deactivated:** same as above; jobs pile up in `pending` status; admin email alerts after 6 failed attempts across 6h total.
@@ -1502,7 +1605,7 @@ Explicit addition to `/privacy`:
 - **Order amendment** (rare — we might retroactively update a shipping address): manual via admin; back-sync updates SF.
 - **Customer requests data deletion (DPDP right to erasure):** we redact in OrderLink's DB + enqueue a delete job to SF that deletes the Person Account + cascades Orders. Documented in /privacy.
 
-### 13.10 Scope split
+### 13.11 Scope split
 
 | Item | Phase 2a | Phase 2b+ |
 |---|---|---|
