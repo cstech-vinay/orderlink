@@ -21,14 +21,23 @@ Transform `orderlink.in` from a static coming-soon page into a functioning e-com
 4. Single-item checkout with two payment paths:
    - **Prepaid** (full amount online via Razorpay, 5% discount on product)
    - **Pay-on-Delivery** (₹49 shipping upfront via Razorpay + product amount in cash on delivery — filters abandoned COD orders)
-5. Order capture with pincode auto-lookup (India Post)
+5. Order capture with pincode auto-lookup (India Post) + **serviceability check**
 6. Razorpay integration (order creation, checkout modal, server-side signature verification, webhook)
-7. Postgres schema for orders, order items, inventory tracking
-8. Email notifications via Resend: admin notification on new order + customer confirmation
-9. Five policy pages (Terms, Privacy, Refund, Shipping, Contact) — Razorpay KYC requirement
-10. Minimal `/admin/orders` page (basic auth, table view with status toggle)
-11. Docker container replacing current deployment, Traefik labels, DNS unchanged
-12. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
+7. Postgres schema for orders, order items, inventory tracking, coupons, restock notifications
+8. Email notifications via Resend: admin notification on new order + customer confirmation (with invoice PDF attached)
+9. **GST-compliant invoice PDF** generated per order (CGST Act §31 requirement)
+10. Six policy pages (Terms, Privacy, Refund, Shipping, Contact, Logistics) — Razorpay KYC + CPA 2019 + DPDP Act 2023 compliant
+11. **DPDP Act 2023 compliance**: cookie consent banner, privacy policy listing purposes/retention/third parties, customer data-rights path
+12. **Customer order tracking page** (`/track`) — no login, enter order # + last-4 mobile
+13. Minimal `/admin/orders` page (basic auth, table view with status toggle, CSV export)
+14. **Pincode serviceability check** at checkout — verifies Meesho coverage before accepting order
+15. **Error tracking via Sentry** (client + server, free tier)
+16. **WhatsApp click-to-chat** floating button (links to business WhatsApp)
+17. **UTM parameter capture** on every order (`utm_source`, `utm_medium`, `utm_campaign`, `referrer`, `landing_page`)
+18. **Automated database backups** — nightly pg_dump → encrypted → off-VPS storage
+19. FOMO + social-proof mechanics per §4.5 (activity popup, "selling fast" badge, first-order + exit-intent coupons, back-in-stock capture)
+20. Docker container replacing current deployment, Traefik labels, DNS unchanged
+21. Preserve existing brand aesthetic: Fraunces + Instrument Sans + JetBrains Mono, warm cream palette, coral accents, film grain
 
 ### Explicitly out of scope (deferred to later phases)
 
@@ -141,6 +150,25 @@ balance_due_paise   int    -- remainder payable on delivery in cash
 razorpay_order_id   text (nullable)
 razorpay_payment_id text (nullable)
 razorpay_signature  text (nullable)
+coupon_code         text (nullable, fk -> coupons.code)
+coupon_discount_paise int  default 0
+-- GST invoice (generated on confirmation / advance_paid / paid)
+invoice_number      text (nullable, unique) -- "OL-INV-2026-000001"
+invoice_pdf_path    text (nullable)         -- S3/Postgres large-object ref or filesystem path
+gst_base_paise      int  default 0         -- total_paise − tax components
+gst_cgst_paise      int  default 0         -- intra-state only
+gst_sgst_paise      int  default 0         -- intra-state only
+gst_igst_paise      int  default 0         -- inter-state only (MH ship state ≠ ship_state)
+-- Attribution
+utm_source     text (nullable)
+utm_medium     text (nullable)
+utm_campaign   text (nullable)
+utm_term       text (nullable)
+utm_content    text (nullable)
+referrer       text (nullable)
+landing_page   text (nullable)
+-- Customer tracking
+track_key           text   -- last 4 digits of mobile, used in /track?id=...&code=XXXX
 notes               text (nullable, admin notes)
 created_at    timestamptz  default now()
 updated_at    timestamptz  default now()
@@ -605,7 +633,93 @@ created_at     timestamptz
 notified_at    timestamptz (nullable)
 ```
 
-### 4.6 Admin — `/admin/orders`
+### 4.6 Customer order-tracking page — `/track`
+
+No login. Customer types:
+
+- **Order #** (e.g. `OL-2026-0001`)
+- **Last 4 digits of mobile** (used as `track_key`; stops casual enumeration)
+
+On submit, page shows:
+
+- Order status timeline (submitted → confirmed → shipped → delivered), current stage highlighted in coral
+- Expected delivery window (e.g. "Arriving 22–24 Apr")
+- Shipping block (address, payment method, what's paid, what's due on delivery for POD)
+- Meesho tracking ID + deep-link when available (populated when admin marks `shipped`)
+- Primary actions: `Track on Meesho ↗`, `Need help? WhatsApp us`, `Email support`
+
+Rate-limited: 5 attempts per hour per IP to prevent scraping. After 5 failures, shows "Try again in an hour or email support@orderlink.in."
+
+Link to `/track?id=OL-2026-0001` (pre-fills order #) is included in every confirmation email and the `/orders/[id]/thanks` screen.
+
+### 4.7 WhatsApp click-to-chat floating button
+
+Single floating button, bottom-right of viewport on all pages except `/admin`.
+
+- Uses your WhatsApp Business number (same as `+91 20 66897519` or a dedicated mobile — **user to confirm which**)
+- Deep-link format: `https://wa.me/91XXXXXXXXXX?text=Hi%20OrderLink`
+- Icon: standard WhatsApp logo, but tinted to coral-on-cream to fit the brand palette (not the usual lurid green)
+- Bubble size: 56px, 20px from edges
+- Does not appear on checkout (reduces drop-off mid-payment)
+- Pulses subtly once every 20 seconds (same coral-ring animation as the Coming Soon pill)
+
+### 4.8 Pincode serviceability
+
+When customer enters pincode on checkout:
+
+1. On blur, call `/api/pincode/[code]`:
+   - First checks a local whitelist (cached JSON of 28,000 serviceable Indian pincodes — ~400KB gzipped, generated from Meesho's public pincode endpoint on deploy)
+   - If in whitelist → resolves to city/state via India Post API (cached 24 h)
+   - If not in whitelist → returns `{ serviceable: false }`
+2. Inline response rendered below the field:
+   - **Serviceable:** `✓ We deliver to {city}, {state} in 2–3 days` (sage green)
+   - **Not serviceable:** `⚠ Sorry, we don't ship here yet. [Notify me when available]` (amber tone)
+3. Buy button disabled while pincode is invalid or unserviceable; re-enabled on serviceable pincode
+4. Unserviceable flow captures email → `restock_notifications` (reused table, with `product_slug='pincode:XXXXXX'` as the key)
+
+The whitelist is a build-time asset in `public/pincodes.json`. Regenerated weekly (user-triggered or cron script).
+
+### 4.9 UTM / attribution capture
+
+Middleware in `app/(site)/layout.tsx` reads URL query params on every page load:
+
+- `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `referrer`, `landing_page`
+- Stored in `sessionStorage` under key `orderlink.attribution`
+- On `/api/orders` submit, included in the POST body and written to the order row
+
+No cookies used — attribution is session-bound, DPDP-clean (no consent required for sessionStorage per the Act's definition of strictly-necessary processing).
+
+### 4.10 DPDP Act 2023 compliance — cookie banner + data-rights path
+
+**Cookie banner** (first-visit, persisted in localStorage):
+
+```
+  ┌────────────────────────────────────────────────────────────┐
+  │ We use essential cookies to run the store and             │
+  │ process your orders. No tracking or advertising cookies.  │
+  │ Read our Privacy Policy for details.                      │
+  │                                                            │
+  │ [ Accept essentials only ]  [ Preferences ]  [ Decline ]  │
+  └────────────────────────────────────────────────────────────┘
+```
+
+Banner is dismissible; choice stored in localStorage as `orderlink.dpdp.consent`. "Preferences" opens a modal with two toggles:
+
+- **Essentials** (session, CSRF) — always on, can't disable
+- **Analytics** (Plausible, if/when added in 2b) — default off
+
+Because we don't currently load any non-essential cookie, even the "Decline" choice doesn't block functionality — the banner is compliance theatre that the law requires.
+
+**Data rights path** (in `/privacy`):
+
+- Right to access: customer emails `hello@orderlink.in` with "Subject: Data access request — order XXX". Admin replies within 30 days with stored data in machine-readable form (CSV).
+- Right to correction: same email flow.
+- Right to deletion: email flow. We redact the order row (name, email, mobile, address replaced with `[redacted]`), keep `invoice_number` + `total_paise` + `created_at` for tax/statutory retention (GST records must be kept 6 years per CGST Rules).
+- Right to portability: CSV export on request.
+- **Data Protection Officer:** Vinay Vernekar, Director — `hello@orderlink.in`, `+91 20 66897519` (listed in /contact + /privacy).
+- **Breach notification window:** 72 hours to Data Protection Board + affected users. Process documented internally.
+
+### 4.11 Admin — `/admin/orders`
 
 Protected by HTTP Basic Auth (username + password from env vars). Single-page table:
 
@@ -745,6 +859,71 @@ Placeholders in all six policy pages for CIN + address — single find-and-repla
 
 Drafted with Indian e-commerce boilerplate + OrderLink-specific details. All linked from footer. Privacy and Terms linked from checkout form.
 
+### 6.1 GST invoice generation
+
+**Legally required** for every sale under CGST Act §31 once the legal entity has an active GSTIN. Our model:
+
+**Invoice number format:** `OL-INV-2026-000001` — prefixed, zero-padded sequential, year-segmented. Numbering is gap-free (regulatory requirement — an admin-only `/api/invoices/renumber` stub is documented for if we ever need to close a fiscal year cleanly).
+
+**Invoice contents (each line is a compliance requirement, not nice-to-have):**
+
+- Top-of-page: legal name **CodeSierra Tech Private Limited**
+- CIN: `U62013PN2025PTC241138`
+- GSTIN: `27AAMCC6643G1ZF`
+- Registered office address (from `lib/legal.ts`)
+- "OrderLink" brand line beneath (cosmetic)
+- Invoice number + invoice date
+- Customer: name, shipping address, (email/mobile optional)
+- Place of supply: customer's state (drives intra vs inter-state GST)
+- Product table: Description, HSN code, Qty, Unit price (taxable value), Taxable amount
+- Tax breakup:
+  - **Intra-state** (customer is in Maharashtra — same as us): CGST 9% + SGST 9%
+  - **Inter-state** (customer outside MH): IGST 18%
+  - Rates are placeholder — **actual rate depends on HSN code** per product (e.g., glassware 7013 attracts 18% GST; some kitchen items 12%). Implementation-time action: map each product slug to its HSN + GST rate.
+- Total in INR, rounded per CGST Rules
+- Payment method + status (Paid / POD advance paid / Balance due on delivery)
+- Footer: "This is a computer-generated invoice and does not require a signature" + grievance redressal line with DPO contact
+
+**Technical implementation:**
+
+- Rendered via React-PDF (@react-pdf/renderer) from a template component `src/invoices/InvoiceDocument.tsx`
+- Generated server-side on order-state transition (prepaid: at `paid`; POD: at `advance_paid`)
+- Stored as `application/pdf` in filesystem mount (`/app/data/invoices/`) with path in `orders.invoice_pdf_path`
+- Attached to order-confirmation email + downloadable from `/orders/[id]/thanks` and `/track`
+- Admin `/admin/orders` has a "Download invoice" button per row
+
+**Important note for small revenue (first year):** even below ₹40 lakh turnover, since the company HAS a GSTIN, invoicing with GST is mandatory (the exemption from GSTIN itself is what the ₹40L threshold triggers — once you're registered, every sale is taxed). Your CA will confirm, but design defaults to always-issuing a GST invoice.
+
+### 6.2 Legal identifiers — single source of truth
+
+A file `src/lib/legal.ts` exports one constant used by every policy page, invoice, and footer:
+
+```ts
+export const LEGAL = {
+  companyName: "CodeSierra Tech Private Limited",
+  brandName: "OrderLink",
+  cin: "U62013PN2025PTC241138",
+  gstin: "27AAMCC6643G1ZF",
+  panEmbedded: "AAMCC6643G",     // derived from GSTIN chars 3–12
+  registeredAddress: {           // TO BE FILLED by user
+    line1: "<TBD>",
+    line2: "<TBD>",
+    city: "Pune",
+    state: "Maharashtra",
+    pincode: "<TBD>",
+    country: "India",
+  },
+  supportEmail: "hello@orderlink.in",
+  supportPhone: "+91 20 66897519",
+  dpoName: "Vinay Vernekar",      // Data Protection Officer
+  dpoDesignation: "Director",
+  grievanceOfficerName: "Vinay Vernekar",  // Same per E-Commerce Rules 2020
+  incorporatedYear: 2025,
+} as const;
+```
+
+One commit replaces every legal identifier across the site when the registered address arrives.
+
 ## 7. Email + notifications
 
 **On new order (both paths):**
@@ -848,7 +1027,42 @@ SITE_URL=https://orderlink.in
 
 A `.env.example` committed with placeholder values serves as the canonical list.
 
-### 8.4 Migration from Phase 1
+### 8.4 Database backups (nightly, off-VPS)
+
+**Non-negotiable for a store that handles real money.** Daily automated backups of the `orderlink` Postgres database to an off-VPS destination.
+
+**Scheme:**
+
+- A separate tiny sidecar container `orderlink-backup` (Alpine + `pg_dump` + `restic` or `rclone` + `cron`)
+- Nightly at 02:30 IST:
+  1. `pg_dump --format=custom --compress=9` of `orderlink` database
+  2. Encrypt with GPG using a key stored in VPS (public key in-repo, private key only on VPS)
+  3. Upload to **Cloudflare R2 free tier** (10 GB/month free, zero egress fees; alternative: Backblaze B2, 10 GB free)
+  4. Also keep 7 most recent dumps in `/root/orderlink/data/backups/` (local copy for fast restore)
+- Retention: daily for 30 days, weekly (Sun) for 3 months, monthly (1st) for 1 year — managed by `restic forget` policy
+- Health check: each run emits a status POST to `hc-ping.com/<uuid>` (free); if cron fails to fire or backup fails, we get an email alert within an hour
+- Restoration drill: documented restore procedure tested once before go-live; README contains the exact `pg_restore` command
+
+**Bucket policy**: R2 bucket `orderlink-backups` has write-only credentials baked into the backup container; restore credentials kept separately in password manager (defence against ransomware-style wipe of backups).
+
+### 8.5 Error tracking — Sentry
+
+Client + server-side instrumentation via `@sentry/nextjs`. Free tier (5,000 events/month) is sufficient for launch volumes.
+
+- `SENTRY_DSN` in `.env`
+- Source maps uploaded on build (via `@sentry/webpack-plugin`)
+- PII scrubbing: `beforeSend` strips `customer_mobile`, `customer_email`, `ship_line1`, `ship_line2`, `customer_name` from all events
+- Alerts set to email on any unhandled exception
+- Performance monitoring off initially (stays under free-tier event quota)
+
+### 8.6 Uptime monitoring
+
+- **[UptimeRobot](https://uptimerobot.com) free tier** — pings `https://orderlink.in/api/healthz` every 5 minutes from multiple regions
+- Alerts via email + WhatsApp (free tier supports both)
+- Second monitor: `https://orderlink.in/` every 15 minutes
+- Public status page optional (skip for 2a)
+
+### 8.7 Migration from Phase 1
 
 1. Build and test Next.js container locally (where possible) and on VPS
 2. Spin up new container with different Traefik label (e.g., `staging.orderlink.in`) on VPS
@@ -896,15 +1110,25 @@ Minimal but meaningful coverage:
 Phase 2a ships successfully when:
 
 1. A customer can visit `orderlink.in`, see the home page with 25 products, click Oil Dispenser
-2. Place a **Pay-on-Delivery order** end-to-end — pays ₹49 via Razorpay test card, receives confirmation screen + email, order row shows `status=advance_paid`, `advance_paise=4900`, `balance_due_paise=<remainder>`
-3. Place a **Prepaid order** end-to-end via Razorpay test card, receives confirmation, order row shows `status=paid`, `balance_due_paise=0`
-4. You receive admin email per order with full details (customer info, shipping address, payment status, balance due if POD) — ready to paste into Meesho
-5. `/admin/orders` shows both orders, status toggle works, COD-received checkbox on delivered orders updates `paid` state
-6. Site scores Lighthouse mobile ≥ 85 for Performance, Accessibility, Best Practices, SEO
-7. All policy pages are live and linked; footer shows "OrderLink — a brand of CodeSierra"
-8. Inventory counter visibly decrements after a real order (advance-paid or paid)
-9. Razorpay webhook correctly reconciles a flaky-browser scenario (simulate closing tab mid-payment; webhook arrives and order state is consistent)
-10. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap
+2. Place a **Pay-on-Delivery order** end-to-end — pays ₹49 via Razorpay test card, receives confirmation screen + email + **GST invoice PDF attached**, order row shows `status=advance_paid`, `advance_paise=4900`, `balance_due_paise=<remainder>`, `invoice_number` populated
+3. Place a **Prepaid order** end-to-end via Razorpay test card, receives confirmation with invoice, order row shows `status=paid`, `balance_due_paise=0`
+4. You receive admin email per order with full details (customer info, shipping, UTM attribution, coupon if any, payment status, balance due if POD, invoice link) — ready to paste into Meesho
+5. `/admin/orders` shows both orders, status toggle works, COD-received checkbox on delivered orders updates `paid` state, CSV export works
+6. **Pincode serviceability**: entering a known-unserviceable pincode (or invalid one) disables Buy button and shows the "notify me" capture
+7. **`/track` page**: customer can enter order # + last-4 mobile and see status; invalid attempts rate-limited
+8. **DPDP cookie banner** appears on first visit and respects user choice across pages
+9. **GST invoice PDF**: opens a generated invoice, CodeSierra Tech Pvt Ltd + CIN + GSTIN visible, correct CGST/SGST or IGST split based on customer state
+10. **WhatsApp floating button** opens wa.me with prefilled message
+11. **Activity popup (Option B)** fires on product page with randomized realistic message; hidden on checkout + home; `prefers-reduced-motion` respected
+12. **First-order coupon `WELCOME10`** applies at checkout for first-time customer email/mobile combo; subsequent attempts rejected
+13. Site scores Lighthouse mobile ≥ 85 for Performance, Accessibility, Best Practices, SEO
+14. All policy pages are live and linked; footer shows "OrderLink — a brand of CodeSierra Tech Private Limited · CIN · GSTIN"
+15. Inventory counter visibly decrements after a real order (advance-paid or paid)
+16. Razorpay webhook correctly reconciles a flaky-browser scenario (simulate closing tab mid-payment; webhook arrives and order state is consistent)
+17. **Sentry** captures a test error, PII is stripped from the captured payload
+18. **Nightly backup** runs, pushes to R2, health-check endpoint pings; test restore to a scratch DB succeeds
+19. **UptimeRobot** monitor is green for 24 hours post-launch
+20. Current coming-soon page is replaced without DNS changes or downtime > 60 seconds during swap
 
 ## 12. Explicit non-goals
 
@@ -913,7 +1137,57 @@ Phase 2a ships successfully when:
 - Customer-initiated cancellations or refunds — manual via email for 2a
 - Multi-language — English only for 2a
 - Mobile app — web responsive only
-- Analytics — defer to 2b
+- Analytics beyond UTM capture — defer to 2b
+
+## 13. Roadmap — what ships after 2a
+
+Captured here so scope doesn't creep into 2a and so you can see the sequence cleanly. Rough order of value × effort; specifics get their own spec when that phase starts.
+
+### Phase 2b — expand catalog + trust depth (~1–2 weeks)
+
+1. **Activate remaining products** — migrate 24 Coming-Soon SKUs to `live` as supply is confirmed. One `products.ts` commit each.
+2. **Shopping cart** — multi-item checkout, "add to cart" from product card, mini-cart drawer
+3. **Quoted Meesho reviews on product pages** — 5–8 real reviews per product, attributed: "Priya S., verified buyer on Meesho"
+4. **Referral program** — `SHARE-VINAY-20` codes, give-₹20-get-₹20, shareable via WhatsApp deep-link
+5. **Wishlist** — localStorage-backed ❤ button on cards
+6. **Privacy-first analytics** — self-hosted Plausible on VPS (~20 MB RAM, 10-min setup), no cookie consent needed, gives page views + referrers + funnel
+7. **Mobile number OTP at checkout** — via Razorpay's free OTP API, filters fake POD orders
+8. **Customer-initiated order cancellation** — within 1 hour of placing, before manual confirmation
+9. **Automated customer emails per status transition** — shipped notification, out-for-delivery, delivered with review request
+10. **Google Search Console verification + sitemap ping** — not ship-critical but an easy day-one SEO win we should schedule
+
+### Phase 2c — ops automation (~2–3 weeks)
+
+1. **Shiprocket integration** — alternative to Meesho for SKUs Meesho doesn't carry; unlocks direct supplier dropship
+2. **Meesho Supplier API** — if access granted, automate order placement (Meesho has a Seller Panel API with limited partners)
+3. **Email marketing** — newsletter list via Resend / Brevo; post-purchase flow, restock notifications
+4. **2FA for admin** — TOTP via authenticator app
+5. **Staging environment** — `staging.orderlink.in` with its own DB; branch previews via GitHub Actions
+6. **CI/CD** — GitHub Actions builds + deploys to VPS on tag push; auto-runs migrations
+7. **Invoice improvements** — e-invoice integration (if turnover crosses threshold — currently 5 Cr, non-concern), digital signature
+8. **Admin dashboard** — today's revenue, order volume chart, low-inventory alerts, conversion rate
+
+### Phase 2d — growth + scale (~ongoing)
+
+1. **Product variants** (size, color) — relevant when fashion/footwear activate
+2. **Category landing pages** — `/c/kitchen`, `/c/beauty`, etc. for SEO
+3. **Site search** — Algolia or Meilisearch
+4. **Hindi + regional language support** — `/hi/`, `/ta/`, `/te/`
+5. **Facebook Conversions API + Meta Pixel** — server-side conversion tracking for Meta Ads
+6. **Google Ads conversion tracking + Merchant Center feed** — product listings on Google Shopping
+7. **A/B testing framework** — hypothesis-driven optimization once volume is meaningful (~500 orders/month)
+8. **Loyalty / repeat-customer program** — points, tier benefits
+9. **Customer accounts with order history** — when wishlist + repeat orders justify the friction
+10. **Live chat widget** — staffed support, only when support volume justifies
+11. **Multi-currency** — if any international expansion considered
+12. **Subscription / auto-reorder** — for consumables (matches well with the kitchen category long-term)
+
+### Explicitly never doing
+
+- **Live viewer count fabrication** ("12 people viewing now") — cheapens brand
+- **Fake urgency timers** that reset on refresh
+- **Affiliate / network-marketing reseller tier** — off-brand for a curated store
+- **Deep discounting cycles** that train customers to wait for sales — a curated brand holds price
 
 ---
 
