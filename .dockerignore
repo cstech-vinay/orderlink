@@ -1,0 +1,23 @@
+# Only optimized assets ship in the image — exclude originals (~4 MB)
+assets/bg.jpg
+assets/logo_horizontal.png
+assets/logo_standalone.png
+
+# Dev / tooling
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docs / planning
+docs/
+README.md
+*.md
+
+# Runtime artefacts
+node_modules/
+*.log
+.env
+.env.*

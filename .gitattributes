@@ -1,0 +1,28 @@
+# Normalize line endings to LF for all text files (Docker/nginx/unix tooling)
+* text=auto eol=lf
+
+# Explicit binary (don't diff, don't eol-convert)
+*.webp binary
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.pdf  binary
+
+# Explicit text + LF
+*.html   text eol=lf
+*.css    text eol=lf
+*.js     text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.xml    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.conf   text eol=lf
+Dockerfile text eol=lf
