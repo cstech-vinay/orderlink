@@ -6,6 +6,7 @@ import {
   SHIPPING_PAISE,
 } from "@/data/products";
 import { getHeadlinePricePaise, getDisplayDiscountPercent } from "@/lib/pricing";
+import { getAvailable } from "@/lib/inventory";
 import { ProductGallery } from "@/components/ProductGallery";
 import { TrustBand } from "@/components/TrustBand";
 import { ReviewDistribution } from "@/components/ReviewDistribution";
@@ -15,6 +16,8 @@ import { ActivityPopup } from "@/components/ActivityPopup";
 import { CustomerReviews } from "@/components/CustomerReviews";
 import { InYourKitchen } from "@/components/InYourKitchen";
 import { HowItWorksRibbon } from "@/components/HowItWorksRibbon";
+import { FOMOLines } from "@/components/FOMOLines";
+import { BackInStockCapture } from "@/components/BackInStockCapture";
 import {
   getAverageRating,
   getReviewCount,
@@ -22,6 +25,9 @@ import {
 } from "@/data/reviews";
 
 export const dynamicParams = false;
+// ISR: regenerate product pages every 60 seconds so FOMOLines (live stock +
+// selling-fast flag) picks up DB changes without hitting it on every request.
+export const revalidate = 60;
 
 export function generateStaticParams() {
   return products.map((p) => ({ slug: p.slug }));
@@ -43,6 +49,8 @@ export default async function ProductPage({
   const isLive = product.status === "live";
   const headlinePricePaise = getHeadlinePricePaise(product);
   const discountPct = getDisplayDiscountPercent(product);
+  const available = isLive ? await getAvailable(product.slug) : 0;
+  const soldOut = isLive && available === 0;
 
   return (
     <main className="max-w-7xl mx-auto px-6 py-12">
@@ -115,18 +123,18 @@ export default async function ProductPage({
                 )}
               </div>
 
-              {/* Payment selector + Buy Now — wired in Task 14 (checkout) */}
-              <div className="rounded-lg border-2 border-dashed border-[color:var(--rule-strong)] p-4">
-                <p className="font-sans text-sm text-ink-soft">
-                  Payment selector + Buy Now button &mdash; wired in the checkout milestone.
-                </p>
+              {soldOut ? (
+                <BackInStockCapture productSlug={product.slug} />
+              ) : (
                 <Link
                   href={`/checkout?sku=${product.slug}`}
-                  className="mt-3 inline-flex rounded-md bg-coral text-cream font-sans text-sm font-medium px-5 py-2 hover:opacity-90 transition"
+                  className="inline-flex rounded-md bg-coral text-cream font-sans text-base font-medium px-6 py-3 hover:opacity-90 transition"
                 >
-                  Go to checkout
+                  Buy now &middot; {rupees(headlinePricePaise)}
                 </Link>
-              </div>
+              )}
+
+              <FOMOLines productSlug={product.slug} />
 
               <TrustBand />
 
@@ -137,7 +145,7 @@ export default async function ProductPage({
                 </li>
                 <li>&#128257; 7-day return on item</li>
                 <li>&#128274; Secure payment via Razorpay</li>
-                <li>&#9201; Only {product.startingInventory} left</li>
+                <li>&#10004; Verified Meesho partner</li>
               </ul>
 
               <p className="font-sans text-sm text-ink-soft">
