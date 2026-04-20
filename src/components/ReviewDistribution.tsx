@@ -3,15 +3,28 @@ type Row = { stars: 1 | 2 | 3 | 4 | 5; percent: number };
 export function ReviewDistribution({
   distribution,
   totalReviews,
+  averageRating,
 }: {
   distribution: Row[];
   totalReviews: number;
+  averageRating?: number;
 }) {
   return (
     <div className="rounded-lg border border-[color:var(--rule)] p-4">
-      <p className="font-mono text-[0.7rem] uppercase tracking-wider text-ink-soft mb-3">
-        Rating distribution from {totalReviews.toLocaleString("en-IN")} Meesho reviews
-      </p>
+      <div className="flex items-baseline justify-between mb-3">
+        <p className="font-mono text-[0.7rem] uppercase tracking-wider text-ink-soft">
+          Customer reviews
+        </p>
+        {averageRating !== undefined && totalReviews > 0 && (
+          <p className="font-display text-base text-ink">
+            {averageRating.toFixed(1)}
+            <span className="font-mono text-[0.7rem] text-ink-soft/80 ml-1">
+              &middot; {totalReviews.toLocaleString("en-IN")} review
+              {totalReviews === 1 ? "" : "s"}
+            </span>
+          </p>
+        )}
+      </div>
       <ul className="space-y-1.5">
         {([5, 4, 3, 2, 1] as const).map((s) => {
           const row = distribution.find((r) => r.stars === s);

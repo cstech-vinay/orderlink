@@ -11,6 +11,12 @@ import { ReviewDistribution } from "@/components/ReviewDistribution";
 import { ComingSoonBadge } from "@/components/ComingSoonBadge";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
 import { ActivityPopup } from "@/components/ActivityPopup";
+import { CustomerReviews } from "@/components/CustomerReviews";
+import {
+  getAverageRating,
+  getReviewCount,
+  getRatingDistribution,
+} from "@/data/reviews";
 
 export const dynamicParams = false;
 
@@ -60,12 +66,19 @@ export default async function ProductPage({
             )}
           </div>
 
-          {product.meeshoRating && product.meeshoReviewCount && (
-            <p className="font-sans text-sm text-ink-soft">
-              &#9733; {product.meeshoRating.toFixed(1)} &middot;{" "}
-              {product.meeshoReviewCount.toLocaleString("en-IN")} happy customers at Meesho
-            </p>
-          )}
+          {(() => {
+            const reviewCount = getReviewCount(product.slug);
+            if (reviewCount === 0) return null;
+            const avg = getAverageRating(product.slug);
+            return (
+              <p className="font-sans text-sm text-ink-soft">
+                <span className="text-coral">{"\u2605".repeat(Math.round(avg))}</span>{" "}
+                <span className="font-medium text-ink">{avg.toFixed(1)}</span> &middot;{" "}
+                {reviewCount.toLocaleString("en-IN")} verified buyer review
+                {reviewCount === 1 ? "" : "s"}
+              </p>
+            );
+          })()}
 
           {isLive ? (
             <>
@@ -168,15 +181,18 @@ export default async function ProductPage({
             </div>
           </div>
           <aside className="space-y-6">
-            {product.meeshoRatingDistribution && product.meeshoReviewCount && (
+            {getReviewCount(product.slug) > 0 && (
               <ReviewDistribution
-                distribution={product.meeshoRatingDistribution}
-                totalReviews={product.meeshoReviewCount}
+                distribution={getRatingDistribution(product.slug)}
+                totalReviews={getReviewCount(product.slug)}
+                averageRating={getAverageRating(product.slug)}
               />
             )}
           </aside>
         </section>
       )}
+
+      {isLive && <CustomerReviews productSlug={product.slug} />}
     </main>
   );
 }
