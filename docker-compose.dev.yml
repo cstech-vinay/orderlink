@@ -28,6 +28,28 @@ services:
       timeout: 3s
       retries: 10
 
+  # Separate Postgres ONLY for `npm test`. Tests do DELETE FROM orders_ref etc
+  # in beforeEach — if they shared the dev DB, running tests mid-flight would
+  # wipe in-progress orders (happened with OL-2026-0003, cost a test payment).
+  # tmpfs so this DB starts clean every `docker compose up`.
+  db-test:
+    image: postgres:16-alpine
+    container_name: orderlink-pg-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orderlink_user
+      POSTGRES_PASSWORD: devpw
+      POSTGRES_DB: orderlink_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderlink_user -d orderlink_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build:
       context: .

@@ -190,9 +190,15 @@ function CheckoutInner() {
           if (verified.ok) {
             router.replace(`/orders/${created.orderId}/thanks`);
           } else {
-            setSubmitError(
-              `Payment verification failed. Contact support with order ${created.orderNumber}.`
-            );
+            const msg =
+              verified.error === "order_not_found"
+                ? `Couldn't find order ${created.orderNumber} on our side. Your payment went through on Razorpay — email ${"hello@orderlink.in"} with order ${created.orderNumber} and payment ${resp.razorpay_payment_id}.`
+                : verified.error === "signature_invalid"
+                  ? `Signature check failed on order ${created.orderNumber}. Possible tampering. Email support with the payment ID ${resp.razorpay_payment_id}.`
+                  : verified.error === "order_mismatch"
+                    ? `Order mismatch on ${created.orderNumber}. Email support.`
+                    : `Payment verification failed. Contact support with order ${created.orderNumber} and payment ${resp.razorpay_payment_id}.`;
+            setSubmitError(msg);
           }
         },
         modal: {
