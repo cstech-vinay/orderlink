@@ -130,20 +130,22 @@ export function MobileVerifier({ value, onChange, verified, onVerified }: Props)
                 : stage === "code"
                   ? resendIn > 0
                     ? `Resend in ${resendIn}s`
-                    : "Resend OTP"
-                  : "Send OTP"}
+                    : "Resend on WhatsApp"
+                  : "Send code on WhatsApp"}
             </button>
           )}
         </div>
         <span className="mt-1 block font-sans text-xs text-ink-soft/70">
-          We&apos;ll text a 6-digit code to confirm it&apos;s really you. Used later for delivery SMS.
+          We&apos;ll send a 6-digit code via WhatsApp to confirm this number. Used later for delivery SMS from Meesho.
         </span>
       </label>
 
       {stage === "code" && !verified && (
         <div className="rounded-md bg-cream-deep/30 border border-[color:var(--rule)] p-3 space-y-2">
           <label className="block">
-            <span className="font-sans text-sm text-ink-soft">Enter the 6-digit OTP</span>
+            <span className="font-sans text-sm text-ink-soft">
+              Enter the 6-digit code from WhatsApp
+            </span>
             <div className="mt-1 flex gap-2">
               <input
                 type="text"

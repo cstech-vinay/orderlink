@@ -53,15 +53,18 @@ External accounts and keys — many of these have 2-7 day lead times, start earl
   - `refund.processed`
 - [ ] Webhook signing secret pasted into production `.env` as `RAZORPAY_WEBHOOK_SECRET`
 
-### MSG91 (SMS OTP)
-- [ ] MSG91 account + wallet funded (~₹1000 covers ~5000 OTPs)
-- [ ] DLT entity registered on one of Airtel / Jio / Vi operator portals (3-7 days)
-- [ ] MSG91 bound as telemarketer (`1302157225275643280`)
-- [ ] 6-alphabet header registered on DLT (e.g. `ORDLNK`) → active status
-- [ ] OTP content template approved on DLT → DLT Template ID obtained
-- [ ] MSG91 panel: template added, linked to DLT Template ID, MSG91 Template ID copied
-- [ ] Production `.env` has `MSG91_AUTH_KEY` + `MSG91_OTP_TEMPLATE_ID` + `MSG91_SENDER_ID`
+### MSG91 (WhatsApp OTP — Phase 2a uses WhatsApp only, no SMS/DLT)
+- [ ] MSG91 account + wallet funded (~₹500 covers 4000+ WhatsApp OTPs)
+- [ ] **WhatsApp Business Number** claimed in MSG91 → verified via Meta Business Manager (requires Facebook Business Verification if not already done). 1-3 days.
+- [ ] **Green-tick display name** approved for "OrderLink" (optional but strong trust signal). Takes 1-2 weeks, can go live without it.
+- [ ] **Authentication-category message template** drafted in MSG91/Meta, e.g.:
+  > "*{{1}}* is your OrderLink verification code. For your security, don't share it with anyone."
+  Meta approves Authentication templates in minutes to a few hours.
+- [ ] MSG91 panel: template linked, **MSG91 Template ID** copied
+- [ ] Production `.env` has `MSG91_AUTH_KEY` + `MSG91_OTP_TEMPLATE_ID` (WhatsApp template, NOT DLT)
 - [ ] `OTP_COOKIE_SECRET` regenerated for production: `openssl rand -base64 32`
+- [ ] Smoke-tested: place a real test order with a personal mobile, confirm the WhatsApp code arrives in < 5 seconds
+- [ ] Monthly cost reminder: MSG91 WhatsApp channel has a **₹500/mo** platform fee; enable only once ready to launch
 
 ### Cloudflare R2 (backup target)
 - [ ] Bucket `orderlink-backups` created
