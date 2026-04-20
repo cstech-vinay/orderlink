@@ -16,7 +16,9 @@
 - **Payments:** Razorpay (Indian payments aggregator) for prepaid + POD advance. Test keys are `rzp_test_...`.
 - **Logistics:** Meesho Logistics for shipping. Meesho sends its own SMS tracking to customers.
 
-**Salesforce's job in this architecture:** be the **system of record for customer profiles, orders, invoices, and all outbound customer-facing email.** The storefront only owns operational state (inventory reservations, webhook idempotency, coupon redemptions).
+**Salesforce's job in this architecture:** be the **system of record for every piece of business data** — customer profiles, orders, invoices, coupons, coupon redemptions, restock waitlist signups, abandoned-cart leads, attribution, and all outbound customer-facing email. The storefront keeps only **narrow operational state** in Postgres: inventory reservation counters, Razorpay webhook idempotency receipts, OTP session tokens, and a short-lived (90-day) transient `orders_ref` pointer table for fast payment reconciliation during the live webhook window. After 90 days SF is the only copy.
+
+See §2.6 (record-type scoping) for the hard rule that every automation must be OrderLink-only, and §2.7 (hybrid architecture rationale) for why the storefront keeps Postgres at all rather than hitting SF during checkout.
 
 ---
 
@@ -55,6 +57,69 @@ We call this "Option C hybrid":
 
 All traffic from the storefront is **outbound**: `Node → Salesforce` only. Salesforce never POSTs back to the storefront. Status updates done by admins in SF will eventually flow back via a separate back-sync (T31), but that too is a Node-initiated poll. No inbound Salesforce → storefront webhook.
 
+### 2.6 Record-Type scoping — every automation is OrderLink-only
+
+**This is a hard rule.** The Salesforce org may eventually host data for other brands or projects. Nothing built for OrderLink should ever touch a record that isn't OrderLink-flagged.
+
+**How we enforce this:**
+
+1. **Every standard-object record OrderLink writes must carry an OrderLink record type:**
+   - `Account` records → `OrderLink_Customer` record type
+   - `Order` records → `OrderLink_Order` record type
+   - `Lead` records → `OrderLink_Abandoned_Cart` record type
+   - `Product2` records (if seeded) → `OrderLink_Product` record type
+
+2. **Every Flow trigger condition must include a record type filter.** For example, the order confirmation Flow in §7.1 fires only when `$Record.RecordType.DeveloperName = 'OrderLink_Order'`. Without that filter, an unrelated Order in the same org would trigger an OrderLink-branded email. Treat this as a spec violation if any Flow is missing the filter.
+
+3. **Custom objects** (`OrderLink_Coupon__c`, `OrderLink_Coupon_Redemption__c`, `OrderLink_Restock_Waitlist__c`) don't need record types — they are OrderLink-only by name. But their Flows shouldn't depend on fields from other unrelated objects.
+
+4. **Integration user profile restriction**: the profile should grant CRUD only on the four OrderLink record types (not "All" on Account/Order/Lead/Product2). This is belt-and-suspenders: even if a Flow forgot a filter, the API call would fail auth before doing damage.
+
+5. **Queries from the storefront side** also filter by record type. For example, when the back-sync worker (T31) reads recent SF Orders to detect status changes, the SOQL is `WHERE RecordType.DeveloperName = 'OrderLink_Order'`.
+
+**Test for this**: at smoke-test time (§9), create a non-OrderLink Account/Order/Lead manually in SF and confirm **none** of the OrderLink Flows fire against it. Ship this verification in your handoff doc.
+
+### 2.7 Hybrid architecture: SF canonical, Postgres narrow-operational
+
+**Decision date:** 2026-04-20. Documented as ADR-001 in the storefront repo.
+
+**What lives where:**
+
+| Domain | System of record | Postgres role |
+|---|---|---|
+| Customer profile (name, email, mobile, address, UTM history, lifetime metrics) | Salesforce Person Account | None — never stored in PG plaintext except transiently during checkout |
+| Order record (amounts, status, Razorpay ids, line items) | Salesforce Order | Thin pointer row in `orders_ref` for 90 days to reconcile incoming Razorpay webhooks → SF Order Id. Deleted by retention job thereafter. |
+| Invoice PDF | Salesforce Files (ContentVersion) | Local disk fallback during the post-verify sync window only |
+| Coupon catalog (codes, amounts, expiry) | Salesforce Coupon (`OrderLink_Coupon__c`) — **marketing team manages here** | 10-minute read-through cache in PG `coupons` table for hot-path `/api/coupons/validate` performance |
+| Coupon redemption log | Salesforce (`OrderLink_Coupon_Redemption__c`) linked to Order | PG mirror row for one-per-email enforcement at checkout latency; nightly reconciliation |
+| Restock waitlist | Salesforce (`OrderLink_Restock_Waitlist__c`) — **marketing runs campaigns from here** | PG mirror for dedup; deleted on sync |
+| Abandoned cart (filled checkout, didn't pay) | Salesforce Lead (`OrderLink_Abandoned_Cart` RT) | `pending_sf_sync` row with `job_kind=lead_sync` until drained |
+| Inventory counts + reservations | **Postgres only** (Salesforce is not designed for high-concurrency row-level locking) | `inventory` table, conditional atomic UPDATE |
+| Razorpay webhook idempotency | Postgres only | `webhook_events` with UNIQUE on `razorpay_event_id` |
+| OTP session tokens + rate limits | Postgres + in-memory | ephemeral |
+
+**Why not pure-Salesforce:**
+
+- **Latency**: ~500ms per SF API call from the Indian VPS; checkout needs ~6 calls → 3s of blocking time before Razorpay modal. Postgres: 20ms total. Losing ~20% mobile conversion is not negotiable.
+- **Governor limits**: SF enforces 100 SOQL per Apex transaction, 150 DML statements, 15k API calls/day on Developer Edition. OrderLink at 500 orders/day + retries = ~10k/day of orders alone. No headroom for flash sales.
+- **Inventory concurrency**: SF has no row-level locking equivalent. Two parallel "buy last unit" attempts in Apex both succeed → oversell. Postgres does this in one statement.
+- **Uptime coupling**: SF ~99.95% SLA = ~4.3h/yr outage. Pure-SF means the store is closed during those hours. Hybrid means orders still accept, queue backs up, drains on recovery.
+
+**Why not pure-Postgres:**
+
+- Founder wants marketing/ops to live in SF so the CS team can query orders by customer, segment for campaigns, and send emails without touching the storefront repo.
+- SF's 7-year backup/archive handles CGST retention "for free."
+- SF Email Flows give deliverability + audit that would otherwise need SendGrid/Resend plumbing.
+
+**Retention policy (storefront side):**
+
+- `pending_sf_sync` rows: deleted by T30 worker on successful drain (never >1 week old in practice).
+- `orders_ref` rows: deleted 90 days after `sf_synced = true`. Short enough to stay lean; long enough to cover Razorpay's 180-day refund window via a fresh SF-direct query if needed.
+- `webhook_events`: 30-day retention (drops reconciliation window past that).
+- `coupon_redemptions` mirror: deleted when the SF Coupon Redemption record is confirmed synced (nightly).
+- `restock_notifications` mirror: deleted on successful SF sync.
+- Storefront NEVER stores customer full name, email, mobile, or address after SF sync completes. The only exception is `pending_sf_sync`'s encrypted payload, which exists precisely to get PII to SF and is deleted on successful drain.
+
 ---
 
 ## 3. What Salesforce needs from you — deliverables checklist
@@ -63,24 +128,33 @@ Treat this as your Definition of Done:
 
 - [ ] SF org provisioned (Developer Edition is fine for build; production sandbox for UAT)
 - [ ] Person Account enabled on the org
-- [ ] Record types created:
+- [ ] **Standard object record types** created:
   - `OrderLink_Customer` on Account (Person Account-type)
   - `OrderLink_Order` on Order
   - `OrderLink_Product` on Product2 (optional — 25 catalog entries)
   - `OrderLink_Abandoned_Cart` on Lead
-- [ ] All custom fields below created (see §5), with correct types + lengths
+- [ ] **Custom objects** created — these are the domains that fully move to SF in the hybrid architecture (§2.7):
+  - `OrderLink_Coupon__c` — coupon catalog (marketing team CRUD via SF UI)
+  - `OrderLink_Coupon_Redemption__c` — redemption log, one per order that used a coupon
+  - `OrderLink_Restock_Waitlist__c` — back-in-stock email signups for sold-out products
+- [ ] All custom fields created on every object (see §5), with correct types + lengths
 - [ ] Connected App with JWT Bearer flow, scopes: `api refresh_token offline_access`, certificate uploaded
-- [ ] Integration User license allocated, profile scoped to the Record Types above + ContentVersion CRUD
+- [ ] Integration User license allocated, profile scoped to all Record Types + custom objects above + ContentVersion CRUD + Lead CRUD
 - [ ] Organization-Wide Email Address `hello@orderlink.in` verified (SPF + DKIM DNS records given to CodeSierra to add to orderlink.in DNS)
-- [ ] Five Flows built + activated (see §7)
-- [ ] Email templates for the five Flows, using the merge fields listed in §7
+- [ ] **Eight Flows** built + activated (see §7) — the original five order/lead Flows plus three new Marketing Flows for coupons, restock, and back-in-stock campaigns
+- [ ] Email templates for all Flows, using the merge fields listed in §7
+- [ ] **Seed data loaded**: two initial coupons `WELCOME10` (₹10 off first order) and `STAY5` (₹5 off exit-intent), so the storefront's coupon cache refresh has something to read from day one
+- [ ] **Expose active coupons** — see §6.5: either a public Flow-backed REST endpoint OR the integration user can query `OrderLink_Coupon__c WHERE IsActive__c = true` via the standard REST API
+- [ ] **Record-type scoping verified** (see §2.6): every Flow filters on the OrderLink record type in its trigger condition, integration user profile restricts CRUD to OrderLink record types only. Smoke-tested by creating a non-OrderLink Account/Order/Lead manually and confirming no OrderLink Flow fired.
 - [ ] End-to-end smoke test executed using the dummy payloads in §8
 - [ ] A `handoff.md` written for the storefront team containing:
   - Connected App consumer key
   - Integration user username
-  - Three Record Type IDs (`012...`)
+  - **Four** Record Type IDs (Account, Order, Lead, Product)
+  - **Three** custom object API names (if they differ from this spec's defaults)
   - Any custom field API names that differ from this spec's defaults
   - The verified Org-Wide Email ID
+  - The coupon-list REST endpoint URL (§6.5)
   - Any gotchas you hit during setup
 
 ---
@@ -227,6 +301,69 @@ SELECT ContentDocumentId FROM ContentVersion WHERE Id = :versionId
 
 Storefront stores that `069...` id as `sf:{ContentDocumentId}` in its local `orders_ref.invoicePdfPath` column.
 
+### 5.5 Coupon catalog — `OrderLink_Coupon__c` (custom object)
+
+Marketing team creates + edits coupons here. The storefront refreshes its local `coupons` cache from SF every 10 minutes (§6.5 describes the read endpoint). SF is the only place `amount_paise`, `expires_at`, or `is_active` change.
+
+**Object**: `OrderLink_Coupon__c`, label "OrderLink Coupon"
+- Name field: `Name` = the coupon code (e.g. `WELCOME10`) — **used as the External Id**, Unique
+- Default record type: none needed (single-type object)
+
+| Field | API name | Type | Length | Notes |
+|---|---|---|---|---|
+| Name (=Code) | `Name` | Text(40), Unique | 40 | `WELCOME10`, `STAY5`, etc. Uppercase by convention; SF Validation Rule should enforce. |
+| Kind | `Kind__c` | Picklist, Restricted | — | Values: `first_order`, `exit_intent`, `manual`, `promo` |
+| Amount (Paise) | `Amount_Paise__c` | Number(8,0), Required | — | Integer paise. ₹10 off = 1000. |
+| Active | `Is_Active__c` | Checkbox, default `true` | — | Marketing toggles off to retire a code without deleting it (preserves redemption history references) |
+| Starts At | `Starts_At__c` | DateTime | — | Optional — null means "active since forever" |
+| Expires At | `Expires_At__c` | DateTime | — | Optional — null means "no expiry" |
+| Max Uses | `Max_Uses__c` | Number(6,0) | — | Optional — null means unlimited. Enforced on storefront-side via redemption count |
+| Redemption Count | `Redemption_Count__c` | Roll-up Summary COUNT on `OrderLink_Coupon_Redemption__c` (Master-Detail) | — | SF maintains automatically — NOT maintained by storefront |
+| Description | `Description__c` | Long Text Area(500) | 500 | Marketing notes: "Launch week WELCOME", etc. Not surfaced to customers. |
+
+**Upsert strategy**: storefront rarely writes here — only at first-time seed (scripts/seed-coupons — §9). Day-to-day marketing manages via SF UI.
+
+**Read strategy for storefront cache**: `GET /services/data/v63.0/query/?q=SELECT+Name,Kind__c,Amount_Paise__c,Is_Active__c,Starts_At__c,Expires_At__c,Max_Uses__c+FROM+OrderLink_Coupon__c+WHERE+Is_Active__c=true` — see §6.5 for the lease policy.
+
+### 5.6 Coupon Redemption — `OrderLink_Coupon_Redemption__c` (custom object)
+
+Logged by storefront after payment verify succeeds AND a coupon was used. One-per-order; enforced via Unique constraint on `Order__c`.
+
+**Object**: `OrderLink_Coupon_Redemption__c`, label "OrderLink Coupon Redemption"
+- Master-Detail to `OrderLink_Coupon__c` on the `Coupon__c` field (drives the roll-up in §5.5)
+- Lookup to standard `Order` on `Order__c`
+
+| Field | API name | Type | Length | Notes |
+|---|---|---|---|---|
+| Name | `Name` | Auto Number | — | `CR-{0000}` format is fine |
+| Coupon | `Coupon__c` | Master-Detail to `OrderLink_Coupon__c`, Required | — | |
+| Order | `Order__c` | Lookup to Order, Required, Unique | — | One redemption record per Order. UNIQUE constraint prevents duplicate logging on retries. |
+| Customer Email Hash | `Customer_Email_Hash__c` | Text(64) | 64 | SHA-256 hex of lowercased email. Storefront sends this so one-per-email enforcement works without PII in this table. |
+| Amount Applied (Paise) | `Amount_Applied_Paise__c` | Number(8,0) | — | Snapshot of `Coupon.Amount_Paise__c` at redemption time. If marketing later changes the coupon amount, historical records still show what the customer actually got. |
+| Redeemed At | `Redeemed_At__c` | DateTime, default `NOW()` | — | |
+| External Id | `OrderLink_External_Id__c` | Text(60), Unique, External ID | 60 | `orderlink:redemption:{orderRefUuid}` — upsert key so retries are idempotent |
+
+**Upsert strategy**: storefront calls `PATCH /sobjects/OrderLink_Coupon_Redemption__c/OrderLink_External_Id__c/orderlink:redemption:{orderRefUuid}` with Coupon__c + Order__c set via foreign key references on the payload.
+
+### 5.7 Restock Waitlist — `OrderLink_Restock_Waitlist__c` (custom object)
+
+Customers clicking "Notify me when back" on a sold-out product page land here. Marketing sends the recovery email when inventory replenishes (via a Flow they trigger manually or via a product-availability Flow).
+
+**Object**: `OrderLink_Restock_Waitlist__c`, label "OrderLink Restock Waitlist"
+
+| Field | API name | Type | Length | Notes |
+|---|---|---|---|---|
+| Name | `Name` | Auto Number | — | `RW-{0000}` |
+| Product Slug | `Product_Slug__c` | Text(60), Indexed | 60 | `oil-dispenser` |
+| Product Title | `Product_Title__c` | Text(120) | 120 | Snapshotted for campaign emails |
+| Email | `Email__c` | Email, Required | — | Stored plaintext (marketing needs it to send). Lowercased by storefront before write. |
+| Signed Up At | `Signed_Up_At__c` | DateTime, default `NOW()` | — | |
+| Notified At | `Notified_At__c` | DateTime | — | Set by the SF restock-notified Flow when the recovery email fires. NULL means still waiting. |
+| Campaign | `Campaign__c` | Lookup to Campaign | — | Optional — link to a SF Campaign if the team wants funnel-tracking |
+| External Id | `OrderLink_External_Id__c` | Text(120), Unique, External ID | 120 | `orderlink:restock:{productSlug}:{emailHashShort}` — prevents duplicate signups for the same (product, email) pair |
+
+**Upsert strategy**: `PATCH /sobjects/OrderLink_Restock_Waitlist__c/OrderLink_External_Id__c/orderlink:restock:{slug}:{hash}` — idempotent.
+
 ---
 
 ## 6. Connected App / JWT Bearer setup
@@ -278,7 +415,63 @@ Also:
 
 ---
 
-## 7. Flows — five workflows that produce the customer's experience
+### 6.5 Exposing the active-coupon list to the storefront cache
+
+The storefront refreshes its local `coupons` PG cache every 10 minutes. It needs a read endpoint that returns active coupons with their kind + amount + expiry.
+
+**Option A (recommended, simplest):** let the storefront hit the standard SOQL REST endpoint:
+
+```
+GET /services/data/v63.0/query/?q=SELECT+Name,Kind__c,Amount_Paise__c,Is_Active__c,Starts_At__c,Expires_At__c,Max_Uses__c+FROM+OrderLink_Coupon__c+WHERE+Is_Active__c=true
+```
+
+Auth via the standard Integration user JWT token. No SF-side code required.
+
+**Option B (if you want a more stable public contract):** expose an Apex REST endpoint `/apexrest/OrderLinkCoupons/v1`:
+
+```apex
+@RestResource(urlMapping='/OrderLinkCoupons/v1')
+global class OrderLinkCouponsEndpoint {
+    @HttpGet
+    global static List<Coupon> listActive() {
+        List<Coupon> out = new List<Coupon>();
+        for (OrderLink_Coupon__c c : [
+            SELECT Name, Kind__c, Amount_Paise__c, Starts_At__c, Expires_At__c, Max_Uses__c, Redemption_Count__c
+            FROM OrderLink_Coupon__c
+            WHERE Is_Active__c = true
+        ]) {
+            out.add(new Coupon(c));
+        }
+        return out;
+    }
+    global class Coupon {
+        public String code;
+        public String kind;
+        public Integer amountPaise;
+        public Datetime startsAt;
+        public Datetime expiresAt;
+        public Integer maxUses;
+        public Integer redemptions;
+        Coupon(OrderLink_Coupon__c c) {
+            this.code = c.Name;
+            this.kind = c.Kind__c;
+            this.amountPaise = c.Amount_Paise__c == null ? 0 : Integer.valueOf(c.Amount_Paise__c);
+            this.startsAt = c.Starts_At__c;
+            this.expiresAt = c.Expires_At__c;
+            this.maxUses = c.Max_Uses__c == null ? null : Integer.valueOf(c.Max_Uses__c);
+            this.redemptions = c.Redemption_Count__c == null ? 0 : Integer.valueOf(c.Redemption_Count__c);
+        }
+    }
+}
+```
+
+Pros of B: stable API surface (storefront doesn't know about SF object names). Cons: more Apex to maintain.
+
+**Your call.** For Phase 2b launch, Option A is fine — the query is simple, the storefront's SF client already has OAuth. The storefront team will just put the SOQL in their `refreshCouponCache()` function.
+
+---
+
+## 7. Flows — eight workflows that produce the customer's experience
 
 Build these as **Record-Triggered Flows** unless noted. Each Flow sends an email via the SF Organization-Wide Email Address `hello@orderlink.in`. Email templates use merge fields; copy is below each Flow.
 
@@ -286,7 +479,9 @@ Runtime: all Flows should run **after save** to ensure all fields are populated.
 
 ### 7.1 Flow: "Send order confirmation email"
 
-**Trigger:** Order record, criteria: `OrderLink_Status__c` changes to `paid` OR `advance_paid` **AND** at least one ContentDocumentLink exists for this record (to ensure invoice is attached).
+**Trigger:** Order record, criteria: `RecordType.DeveloperName = 'OrderLink_Order'` **AND** `OrderLink_Status__c` changes to `paid` OR `advance_paid` **AND** at least one ContentDocumentLink exists for this record (to ensure invoice is attached).
+
+**Record-type guard:** this Flow must not fire for non-OrderLink Orders. Verify this during smoke test by creating a standard Order with a different record type — no email should go out.
 
 **Action:** Send Email (single)
 - Recipient: `Account.PersonEmail`
@@ -325,7 +520,7 @@ CIN U62013PN2025PTC241138 · GSTIN 27AAMCC6643G1ZF
 
 ### 7.2 Flow: "Send shipped notification"
 
-**Trigger:** Order record, `OrderLink_Status__c` changes to `shipped` AND `OrderLink_Meesho_Tracking_URL__c` is not null.
+**Trigger:** Order record, `RecordType.DeveloperName = 'OrderLink_Order'` AND `OrderLink_Status__c` changes to `shipped` AND `OrderLink_Meesho_Tracking_URL__c` is not null.
 
 **Body:**
 ```
@@ -345,7 +540,7 @@ You'll also get SMS updates from Meesho as the parcel moves.
 
 ### 7.3 Flow: "Send delivered thank-you"
 
-**Trigger:** Order record, `OrderLink_Status__c` changes to `delivered`.
+**Trigger:** Order record, `RecordType.DeveloperName = 'OrderLink_Order'` AND `OrderLink_Status__c` changes to `delivered`.
 
 **Body:**
 ```
@@ -366,7 +561,7 @@ Thanks for supporting a small Pune-based team.
 
 ### 7.4 Flow: "Admin new-order alert"
 
-**Trigger:** Order record created (regardless of status).
+**Trigger:** Order record created WHERE `RecordType.DeveloperName = 'OrderLink_Order'` (regardless of status).
 
 **Action:** Send Email (single) to `hello@orderlink.in` (internal ops inbox):
 
@@ -392,7 +587,7 @@ Paste-ready Meesho shipping block:
 
 ### 7.5 Flow: "Abandoned cart recovery email"
 
-**Trigger:** Lead record created where `LeadSource = 'OrderLink Abandoned Cart'`.
+**Trigger:** Lead record created WHERE `RecordType.DeveloperName = 'OrderLink_Abandoned_Cart'` AND `LeadSource = 'OrderLink Abandoned Cart'`. Both filters — belt and suspenders.
 
 **Action:** Wait 1 hour (SF Flow Pause + resume on schedule). Then send email to `Lead.Email`.
 
@@ -414,13 +609,66 @@ genuinely read every email.
 — OrderLink
 ```
 
+### 7.6 Flow: "Restock-available notification" (Marketing-triggered)
+
+**Trigger:** manual (marketing clicks a button on an `OrderLink_Restock_Waitlist__c` record, OR a scheduled Flow fires when a product becomes available again and emails all waitlist rows with `Notified_At__c = NULL`).
+
+**Action:** Send Email to `Email__c`, then set `Notified_At__c = NOW()`.
+
+**Body:**
+```
+Hi —
+
+{!$Record.Product_Title__c} is back in stock.
+
+You asked to be notified, so we're keeping our word. It usually doesn't last
+long when it returns — if you'd like one:
+
+https://orderlink.in/p/{!$Record.Product_Slug__c}
+
+Not interested anymore? Just ignore this — we won't email you again about
+this product.
+
+— OrderLink
+```
+
+### 7.7 Flow: "Coupon redeemed — Marketing notification" (optional)
+
+**Trigger:** `OrderLink_Coupon_Redemption__c` record created.
+
+**Action:** Chatter post to the Marketing team group, OR email a daily digest, OR just rely on the roll-up count on `OrderLink_Coupon__c` for reporting. Simplest: do nothing special, let the roll-up tell marketing which codes are working.
+
+Skip if your org doesn't have a Marketing group. Listed for completeness.
+
+### 7.8 Flow: "First order Person Account rollup" (post-order-insert)
+
+**Trigger:** Order record created WHERE `RecordType.DeveloperName = 'OrderLink_Order'` AND (`OrderLink_Status__c = paid` OR `advance_paid`).
+
+**Action:** Update the linked Person Account (which by construction has `RecordType = OrderLink_Customer`):
+- If `Account.OrderLink_First_Order_At__c` is null → set it to `$Record.CreatedDate`
+- Increment `Account.OrderLink_Lifetime_Orders__c` by 1
+- Add `$Record.OrderLink_Total_Paise__c` to `Account.OrderLink_Lifetime_Revenue_Paise__c`
+
+**Why:** gives marketing the "customer came back for their Nth order" signal without needing any storefront-side state. Pure SF-native rollups.
+
+**Alternative:** replace the numeric fields with real SF Roll-up Summary fields (Account → Order master-detail). Requires reparenting Order from Lookup to Master-Detail → more invasive — prefer the Flow approach unless you already have a master-detail relationship in place.
+
 ---
 
 ## 8. Data contract: what the storefront posts, what it expects back
 
 ### 8.1 Job payload shape (encrypted in storefront Postgres, decrypted inside T30 worker)
 
-The storefront's `pending_sf_sync` table queues jobs. Each row has a `job_kind` (`full_sync` or `lead_sync`) and an AES-256-GCM-encrypted JSON payload. After decrypt, the payload looks like:
+The storefront's `pending_sf_sync` table queues jobs. Each row has a `job_kind` and an AES-256-GCM-encrypted JSON payload. Supported kinds:
+
+| `job_kind` | When enqueued | Target SF object(s) | Payload shape |
+|---|---|---|---|
+| `full_sync` | Order creation (POST /api/orders) | Person Account + Order + ContentVersion (PDF) + CouponRedemption if applicable | Full checkout payload (below) |
+| `lead_sync` | Reaper detects abandoned cart, promotes from `full_sync` (see §2.3) | Lead | Same checkout payload, but most fields used to populate Lead |
+| `coupon_redemption_sync` | Payment verify success, if order used a coupon | CouponRedemption (standalone retry path) | `{orderRefUuid, couponCode, email, orderNumber, amountAppliedPaise}` |
+| `restock_signup_sync` | POST /api/restock-notify | RestockWaitlist | `{productSlug, productTitle, email}` |
+
+For `full_sync` the payload shape is:
 
 ```json
 {
@@ -461,22 +709,56 @@ const externalId = "orderlink:" + hash.slice(0, 30);
 
 ### 8.3 The sync sequence (full_sync)
 
-1. **Upsert Account** via `PATCH /sobjects/Account/OrderLink_External_Id__c/{externalId}` with PA fields.
-2. **Upsert Order** via `PATCH /sobjects/Order/OrderLink_Order_Number__c/{orderNumber}`. Body includes `AccountId` from step 1's response header `Location`.
+1. **Upsert Account** via `PATCH /sobjects/Account/OrderLink_External_Id__c/{externalId}` with PA fields. Body MUST include `RecordTypeId = $SF_PERSON_ACCOUNT_RECORD_TYPE_ID`.
+2. **Upsert Order** via `PATCH /sobjects/Order/OrderLink_Order_Number__c/{orderNumber}`. Body includes `AccountId` from step 1's response header `Location` AND `RecordTypeId = $SF_ORDER_RECORD_TYPE_ID`.
 3. **Read Order.Id** from the Location header of step 2.
 4. **Create ContentVersion** via `POST /sobjects/ContentVersion` (multipart/form-data with PDF bytes + JSON metadata). Set `FirstPublishLocationId` to the Order.Id.
 5. **Query back** `SELECT ContentDocumentId FROM ContentVersion WHERE Id = :versionId` to get the `069...` id.
-6. **Mark the `pending_sf_sync` row as `status = 'synced'`** and store `sf_order_id` + `sf_account_id` on the corresponding `orders_ref` row. `invoicePdfPath` becomes `sf:{ContentDocumentId}`.
-7. `ON CONFLICT` (order upsert returns 204 No Content on update, 201 Created on insert). Both are success.
+6. **If the order used a coupon**: upsert CouponRedemption via `PATCH /sobjects/OrderLink_Coupon_Redemption__c/OrderLink_External_Id__c/orderlink:redemption:{orderRefUuid}` with `Coupon__c`, `Order__c`, `Customer_Email_Hash__c`, `Amount_Applied_Paise__c`. Idempotent.
+7. **Mark the `pending_sf_sync` row as `status = 'synced'`** and store `sf_order_id` + `sf_account_id` on the corresponding `orders_ref` row. `invoicePdfPath` becomes `sf:{ContentDocumentId}`.
+8. `ON CONFLICT` — Account/Order upsert returns 204 No Content on update, 201 Created on insert. Both are success.
 
 ### 8.4 The sync sequence (lead_sync)
 
-1. **Upsert Lead** via `PATCH /sobjects/Lead/OrderLink_External_Id__c/orderlink:lead:{orderRefUuid}` with Lead fields. Include `LeadSource = 'OrderLink Abandoned Cart'`.
+1. **Upsert Lead** via `PATCH /sobjects/Lead/OrderLink_External_Id__c/orderlink:lead:{orderRefUuid}` with Lead fields. Include `RecordTypeId = $SF_LEAD_RECORD_TYPE_ID` AND `LeadSource = 'OrderLink Abandoned Cart'`.
 2. Mark the `pending_sf_sync` row as `status = 'synced'`.
 
-No invoice upload for leads (they didn't pay).
+No invoice upload or CouponRedemption for leads (they didn't pay).
 
-### 8.5 Error handling / retry semantics
+### 8.5 The sync sequence (coupon_redemption_sync)
+
+This path exists as a retry-only fallback — `full_sync` already handles redemption in step 6 of §8.3. The standalone path exists only if the main `full_sync` partially succeeds (account+order+invoice landed, redemption call threw).
+
+1. Upsert CouponRedemption via `PATCH /sobjects/OrderLink_Coupon_Redemption__c/OrderLink_External_Id__c/orderlink:redemption:{orderRefUuid}`. Body: `{Coupon__c: {attributes:{type:'OrderLink_Coupon__c', referenceId:...}, Name: 'WELCOME10'}, Order__c: '<sfOrderId>', Customer_Email_Hash__c: '<hash>', Amount_Applied_Paise__c: 1000}`.
+2. Mark the `pending_sf_sync` row as `status = 'synced'`.
+
+Payload shape after decrypt:
+```json
+{
+  "orderRefUuid": "uuid-of-orders_ref-row",
+  "sfOrderId": "801...",
+  "couponCode": "WELCOME10",
+  "customerEmailHash": "sha256-hex-64-char",
+  "amountAppliedPaise": 1000
+}
+```
+
+### 8.6 The sync sequence (restock_signup_sync)
+
+1. Upsert RestockWaitlist via `PATCH /sobjects/OrderLink_Restock_Waitlist__c/OrderLink_External_Id__c/orderlink:restock:{productSlug}:{emailHashShort}`. Body: `{Product_Slug__c, Product_Title__c, Email__c, Signed_Up_At__c}`.
+2. Mark the `pending_sf_sync` row as `status = 'synced'`.
+3. Storefront-side: delete the `restock_notifications` PG mirror row — SF is canonical from here on. Marketing triggers the §7.6 "Restock-available notification" Flow when they decide to send.
+
+Payload shape after decrypt:
+```json
+{
+  "productSlug": "oil-dispenser",
+  "productTitle": "Premium Glass Oil Dispenser — 500ml",
+  "email": "customer@example.com"
+}
+```
+
+### 8.7 Error handling / retry semantics
 
 The storefront worker reads `pending_sf_sync` rows WHERE `status = 'pending'` AND `next_attempt_at <= now()`. On failure it:
 - Increments `attempts`
@@ -581,6 +863,54 @@ curl -X PATCH "$SF_INSTANCE_URL/services/data/v63.0/sobjects/Lead/OrderLink_Exte
 
 **Expected:** Lead created. The "Abandoned cart recovery email" Flow should fire 1 hour later with the WELCOME10 pitch.
 
+### 9.4 Smoke test 4 — coupon redemption record
+
+After smoke test 2 creates an Order, upsert a coupon redemption for it:
+
+```bash
+curl -X PATCH "$SF_INSTANCE_URL/services/data/v63.0/sobjects/OrderLink_Coupon_Redemption__c/OrderLink_External_Id__c/orderlink:redemption:test-smoke-001" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Coupon__r": { "Name": "WELCOME10" },
+    "Order__c": "'"$ORDER_ID"'",
+    "Customer_Email_Hash__c": "f3a8e91b2c4d7e5a98f6c1b3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f",
+    "Amount_Applied_Paise__c": 1000
+  }'
+```
+
+**Expected:** record created AND the Coupon's `Redemption_Count__c` roll-up bumps to 1 (or N+1) without any Flow work.
+
+### 9.5 Smoke test 5 — restock waitlist signup
+
+```bash
+curl -X PATCH "$SF_INSTANCE_URL/services/data/v63.0/sobjects/OrderLink_Restock_Waitlist__c/OrderLink_External_Id__c/orderlink:restock:oil-dispenser:f3a8e91b2c4d" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Product_Slug__c": "oil-dispenser",
+    "Product_Title__c": "Premium Glass Oil Dispenser — 500ml",
+    "Email__c": "waitlist+test@example.com"
+  }'
+```
+
+**Expected:** record created. Flow §7.6 doesn't fire automatically — it's manually triggered by Marketing.
+
+### 9.6 Smoke test 6 — **record-type isolation (CRITICAL)**
+
+This verifies §2.6's hard rule. Do this before handoff.
+
+1. In SF UI, manually create a **non-OrderLink** Account record (e.g. a Business Account with no record type specified, or a different record type).
+2. Manually create a non-OrderLink Order linked to it.
+3. Change that Order's status to whatever OrderLink's Flow would normally react to (if it's a custom field, skip; if it's a shared field, trigger it).
+4. Wait 2 minutes.
+5. Verify:
+   - No email was sent from `hello@orderlink.in`
+   - No OrderLink-branded notification fired
+   - The OrderLink Flows' execution log (Setup → Flow → View Log) does NOT show runs against this record
+
+If any Flow fired, the record-type filter is missing in its trigger. Fix before handing back.
+
 ---
 
 ## 10. Open questions / things the storefront team should still confirm with you
@@ -610,3 +940,12 @@ If you want to see the exact storefront code that will write to SF before we bui
 ---
 
 *Last updated: 2026-04-20. Questions for CodeSierra storefront team: contact Vinay Vernekar at hello@orderlink.in.*
+
+---
+
+## Changelog
+
+**2026-04-20 (v2)** — Updated for hybrid Postgres+SF architecture (§2.6 record-type scoping + §2.7 hybrid rationale). Added three custom objects: `OrderLink_Coupon__c` (§5.5), `OrderLink_Coupon_Redemption__c` (§5.6), `OrderLink_Restock_Waitlist__c` (§5.7). Added §6.5 coupon-list read endpoint. Added three new Marketing Flows: §7.6 (restock notification), §7.7 (redemption notification, optional), §7.8 (first-order rollup). Added §8.5/8.6 sync sequences for `coupon_redemption_sync` and `restock_signup_sync` job kinds. Added §9.4/9.5/9.6 smoke tests (coupon redemption, restock signup, **record-type isolation CRITICAL test**). All Flow triggers now require `RecordType.DeveloperName = 'OrderLink_*'` filters. Deliverables checklist expanded accordingly.
+
+**2026-04-20 (v1)** — Initial spec with five Flows + Account/Order/Lead/ContentVersion data model.
+
