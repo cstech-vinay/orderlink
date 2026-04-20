@@ -8,6 +8,45 @@ import { PaymentSelector } from "@/components/PaymentSelector";
 import { OrderSummary } from "@/components/OrderSummary";
 import { SalesforceTrustStrip } from "@/components/SalesforceTrustStrip";
 import { MobileVerifier } from "@/components/MobileVerifier";
+import { readAttribution } from "@/lib/attribution";
+
+declare global {
+  interface Window {
+    Razorpay: new (opts: RazorpayOptions) => { open: () => void };
+  }
+}
+
+type RazorpayResponse = {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+};
+
+type RazorpayOptions = {
+  key: string;
+  order_id: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  prefill: { name: string; email: string; contact: string };
+  notes?: Record<string, string>;
+  theme?: { color: string };
+  handler: (resp: RazorpayResponse) => void;
+  modal?: { ondismiss?: () => void };
+};
+
+function loadRazorpayScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") return reject(new Error("SSR"));
+    if (window.Razorpay) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("razorpay_script_failed"));
+    document.body.appendChild(s);
+  });
+}
 
 export default function CheckoutPage() {
   return (
@@ -52,6 +91,8 @@ function CheckoutInner() {
   });
   const [pincodeServiceable, setPincodeServiceable] = useState<boolean | null>(null);
   const [mobileVerified, setMobileVerified] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const amounts = useMemo(() => {
     if (!product) return null;
@@ -72,6 +113,103 @@ function CheckoutInner() {
     },
     []
   );
+
+  const handleSubmit = useCallback(async () => {
+    if (!product || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const attribution = readAttribution();
+      const body = {
+        productSlug: product.slug,
+        fullName: form.fullName,
+        mobile: form.mobile,
+        email: form.email,
+        addressLine1: form.addressLine1,
+        addressLine2: form.addressLine2 || undefined,
+        landmark: form.landmark || undefined,
+        pincode: form.pincode,
+        city: form.city,
+        state: form.state,
+        paymentMethod,
+        couponCode: form.couponCode || undefined,
+        ...attribution,
+      };
+
+      const createRes = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const created = await createRes.json();
+      if (!created.ok) {
+        setSubmitError(
+          created.error === "out_of_stock"
+            ? "Sorry — this item just sold out. Refresh to see alternatives."
+            : created.error === "mobile_not_verified"
+              ? "Please verify your mobile with the OTP code first."
+              : "Couldn't create your order. Please try again in a moment."
+        );
+        return;
+      }
+
+      try {
+        await loadRazorpayScript();
+      } catch {
+        setSubmitError("Couldn't load payment gateway. Check your connection and retry.");
+        return;
+      }
+
+      const rzp = new window.Razorpay({
+        key: created.razorpayKeyId,
+        order_id: created.razorpayOrderId,
+        amount: created.amountPaise,
+        currency: created.currency,
+        name: "OrderLink",
+        description:
+          paymentMethod === "prepaid" ? "Order payment" : "Shipping advance (₹49)",
+        prefill: {
+          name: form.fullName,
+          email: form.email,
+          contact: form.mobile,
+        },
+        notes: { orderlink_order_number: created.orderNumber },
+        theme: { color: "#EC4356" },
+        handler: async (resp) => {
+          const verifyRes = await fetch("/api/orders/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId: created.orderId,
+              razorpayOrderId: resp.razorpay_order_id,
+              razorpayPaymentId: resp.razorpay_payment_id,
+              razorpaySignature: resp.razorpay_signature,
+            }),
+          });
+          const verified = await verifyRes.json();
+          if (verified.ok) {
+            router.replace(`/orders/${created.orderId}/thanks`);
+          } else {
+            setSubmitError(
+              `Payment verification failed. Contact support with order ${created.orderNumber}.`
+            );
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setSubmitError(null);
+            // Reservation will time out via the inventory reaper (T22).
+          },
+        },
+      });
+      rzp.open();
+    } catch (err) {
+      console.error("[checkout] submit failed:", err);
+      setSubmitError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [product, submitting, form, paymentMethod, router]);
 
   if (!product || product.status !== "live" || !amounts) {
     return <CheckoutFallback />;
@@ -187,13 +325,13 @@ function CheckoutInner() {
           <OrderSummary
             product={product}
             method={paymentMethod}
-            canSubmit={canSubmit}
+            canSubmit={canSubmit && !submitting}
             amounts={amounts}
-            onSubmit={() => {
-              // Wired to /api/orders in Task 19
-              alert("Buy Now flow wired in Task 19");
-            }}
+            onSubmit={handleSubmit}
           />
+          {submitError && (
+            <p className="mt-3 font-sans text-sm text-coral">{submitError}</p>
+          )}
         </aside>
       </div>
     </main>
