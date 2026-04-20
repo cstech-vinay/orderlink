@@ -1,0 +1,58 @@
+# Full dev environment — everything runs in containers.
+# Start:   docker compose -f docker-compose.dev.yml up -d
+# Stop:    docker compose -f docker-compose.dev.yml down
+# Logs:    docker compose -f docker-compose.dev.yml logs -f app
+# Migrate: docker compose -f docker-compose.dev.yml exec app npx drizzle-kit migrate
+# Seed:    docker compose -f docker-compose.dev.yml exec app npx tsx scripts/seed-inventory.ts
+#
+# Ports:
+#  - 3000  → Next.js dev (open http://localhost:3000)
+#  - 5432  → Postgres (so host-side drizzle-kit / psql still work via localhost:5432)
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: orderlink-pg-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orderlink_user
+      POSTGRES_PASSWORD: devpw
+      POSTGRES_DB: orderlink
+    ports:
+      - "5432:5432"
+    volumes:
+      - orderlink_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderlink_user -d orderlink"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: orderlink-app:dev
+    container_name: orderlink-app-dev
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Override host-side DATABASE_URL: inside the compose network, Postgres
+      # is reachable at service name "db", not localhost.
+      DATABASE_URL: postgres://orderlink_user:devpw@db:5432/orderlink
+    ports:
+      - "3000:3000"
+    volumes:
+      # Bind source so edits hot-reload. Exclude node_modules + .next so they
+      # stay in the container (host Windows filesystem is slow for those).
+      - .:/app
+      - orderlink_node_modules:/app/node_modules
+      - orderlink_next_cache:/app/.next
+
+volumes:
+  orderlink_pg_data:
+  orderlink_node_modules:
+  orderlink_next_cache:

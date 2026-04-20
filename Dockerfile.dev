@@ -1,0 +1,22 @@
+# Development image — keeps `npm run dev` inside a container so dev/prod
+# environments match. Source is bind-mounted at /app from the host; node_modules
+# stays inside the container (named volume) because bind-mounted node_modules
+# on Windows is painfully slow. Use docker-compose.dev.yml to run.
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install deps once at image build. docker-compose will bind-mount /app over
+# this layer, but node_modules survives via the named volume below.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Next.js will be served on 3000.
+EXPOSE 3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=development
+# HMR on Windows benefits from polling (inotify doesn't see bind-mount changes reliably).
+ENV CHOKIDAR_USEPOLLING=1
+ENV WATCHPACK_POLLING=true
+
+CMD ["npm", "run", "dev"]
