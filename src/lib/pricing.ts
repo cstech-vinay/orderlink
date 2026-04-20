@@ -1,4 +1,4 @@
-import { SHIPPING_PAISE } from "@/data/products";
+import { SHIPPING_PAISE, type Product } from "@/data/products";
 
 export type PaymentMethod = "prepaid" | "pay_on_delivery";
 
@@ -82,4 +82,25 @@ export function calculateGSTBreakup(input: GSTInput): GSTResult {
 
 export function rupees(paise: number): string {
   return `₹${Math.round(paise / 100).toLocaleString("en-IN")}`;
+}
+
+/**
+ * The "headline" price shown on cards, PDP, and ads — i.e. what the customer
+ * will actually be billed at checkout before any prepaid discount.
+ *
+ * For `shippingIncluded: true` products, this rolls shipping into the visible
+ * number (so ads that promise "₹499 all-in" match the storefront). For regular
+ * products it's just the item price, with shipping shown separately.
+ */
+export function getHeadlinePricePaise(product: Product): number {
+  return product.shippingIncluded
+    ? product.itemPricePaise + SHIPPING_PAISE
+    : product.itemPricePaise;
+}
+
+/** Discount % vs MRP, using the headline price the customer actually sees. */
+export function getDisplayDiscountPercent(product: Product): number {
+  const headline = getHeadlinePricePaise(product);
+  if (product.mrpPaise <= headline) return 0;
+  return Math.round(((product.mrpPaise - headline) / product.mrpPaise) * 100);
 }

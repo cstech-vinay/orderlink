@@ -26,6 +26,11 @@ export function OrderSummary({
 }) {
   return (
     <div className="rounded-lg border border-[color:var(--rule)] p-6 bg-cream-deep/30 space-y-4">
+      {product.shippingIncluded && (
+        <div className="rounded-md bg-coral/10 px-3 py-2 font-mono text-[0.7rem] uppercase tracking-widest text-coral">
+          Shipping already in the {rupees(product.itemPricePaise + SHIPPING_PAISE)} price
+        </div>
+      )}
       <div className="flex justify-between font-sans text-sm">
         <span>{product.title}</span>
         <span>{rupees(product.itemPricePaise)}</span>

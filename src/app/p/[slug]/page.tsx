@@ -5,6 +5,7 @@ import {
   products,
   SHIPPING_PAISE,
 } from "@/data/products";
+import { getHeadlinePricePaise, getDisplayDiscountPercent } from "@/lib/pricing";
 import { ProductGallery } from "@/components/ProductGallery";
 import { TrustBand } from "@/components/TrustBand";
 import { ReviewDistribution } from "@/components/ReviewDistribution";
@@ -12,6 +13,8 @@ import { ComingSoonBadge } from "@/components/ComingSoonBadge";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
 import { ActivityPopup } from "@/components/ActivityPopup";
 import { CustomerReviews } from "@/components/CustomerReviews";
+import { InYourKitchen } from "@/components/InYourKitchen";
+import { HowItWorksRibbon } from "@/components/HowItWorksRibbon";
 import {
   getAverageRating,
   getReviewCount,
@@ -38,10 +41,8 @@ export default async function ProductPage({
   if (!product) notFound();
 
   const isLive = product.status === "live";
-  const discountPct =
-    product.mrpPaise > product.itemPricePaise
-      ? Math.round(((product.mrpPaise - product.itemPricePaise) / product.mrpPaise) * 100)
-      : 0;
+  const headlinePricePaise = getHeadlinePricePaise(product);
+  const discountPct = getDisplayDiscountPercent(product);
 
   return (
     <main className="max-w-7xl mx-auto px-6 py-12">
@@ -85,21 +86,33 @@ export default async function ProductPage({
               <div>
                 <div className="flex items-baseline gap-3 flex-wrap">
                   <span className="font-display text-4xl font-semibold text-coral">
-                    {rupees(product.itemPricePaise)}
+                    {rupees(headlinePricePaise)}
                   </span>
-                  <span className="font-sans text-lg text-ink-soft line-through">
-                    {rupees(product.mrpPaise)}
-                  </span>
-                  <span className="font-mono text-xs uppercase tracking-wider text-coral bg-coral/10 rounded px-2 py-0.5">
-                    {discountPct}% off item
-                  </span>
+                  {product.mrpPaise > headlinePricePaise && (
+                    <>
+                      <span className="font-sans text-lg text-ink-soft line-through">
+                        {rupees(product.mrpPaise)}
+                      </span>
+                      <span className="font-mono text-xs uppercase tracking-wider text-coral bg-coral/10 rounded px-2 py-0.5">
+                        {discountPct}% off
+                      </span>
+                    </>
+                  )}
                 </div>
-                <p className="font-sans text-sm text-ink-soft mt-2">
-                  + {rupees(SHIPPING_PAISE)} shipping &middot; non-refundable
-                </p>
-                <p className="font-sans text-base text-ink mt-2 font-medium">
-                  Total: {rupees(product.itemPricePaise + SHIPPING_PAISE)}
-                </p>
+                {product.shippingIncluded ? (
+                  <p className="font-sans text-sm text-ink-soft mt-2">
+                    Shipping included &middot; all-India &middot; no extra charge at checkout
+                  </p>
+                ) : (
+                  <>
+                    <p className="font-sans text-sm text-ink-soft mt-2">
+                      + {rupees(SHIPPING_PAISE)} shipping &middot; non-refundable
+                    </p>
+                    <p className="font-sans text-base text-ink mt-2 font-medium">
+                      Total: {rupees(product.itemPricePaise + SHIPPING_PAISE)}
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Payment selector + Buy Now — wired in Task 14 (checkout) */}
@@ -150,6 +163,10 @@ export default async function ProductPage({
 
       {isLive && <ActivityPopup productTitle={product.title} />}
 
+      {isLive && product.howItWorks && product.howItWorks.length > 0 && (
+        <HowItWorksRibbon steps={product.howItWorks} />
+      )}
+
       {isLive && product.description && (
         <section className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-12">
           <div className="md:col-span-2 space-y-8">
@@ -166,18 +183,11 @@ export default async function ProductPage({
             </div>
             <div>
               <h2 className="font-display text-2xl text-ink">Description</h2>
-              <p className="mt-4 font-sans text-ink leading-relaxed">{product.description}</p>
-            </div>
-            <div>
-              <h2 className="font-display text-2xl text-ink">Specifications</h2>
-              <dl className="mt-4 divide-y divide-[color:var(--rule)]">
-                {product.specs.map((spec) => (
-                  <div key={spec.label} className="py-2 flex justify-between font-sans text-sm">
-                    <dt className="text-ink-soft">{spec.label}</dt>
-                    <dd className="text-ink">{spec.value}</dd>
-                  </div>
+              <div className="mt-4 font-sans text-ink leading-relaxed space-y-4">
+                {product.description.split(/\n\n+/).map((para, i) => (
+                  <p key={i}>{para}</p>
                 ))}
-              </dl>
+              </div>
             </div>
           </div>
           <aside className="space-y-6">
@@ -189,6 +199,51 @@ export default async function ProductPage({
               />
             )}
           </aside>
+        </section>
+      )}
+
+      {isLive && product.scenarios && product.scenarios.length > 0 && (
+        <InYourKitchen scenarios={product.scenarios} />
+      )}
+
+      {isLive && product.specs && product.specs.length > 0 && (
+        <section className="mt-20">
+          <header className="max-w-2xl">
+            <p className="font-mono text-xs uppercase tracking-widest text-coral">
+              Specifications
+            </p>
+            <span
+              className="block h-[0.09em] w-10 bg-coral rounded mt-2"
+              aria-hidden
+            />
+            <h2 className="mt-4 font-display text-3xl md:text-4xl text-ink leading-tight">
+              The{" "}
+              <em className="italic font-normal relative">
+                details
+                <span
+                  className="absolute left-0 right-0 bottom-0.5 h-[0.09em] bg-coral rounded"
+                  aria-hidden
+                />
+              </em>
+              .
+            </h2>
+          </header>
+
+          <dl className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {product.specs.map((spec) => (
+              <div
+                key={spec.label}
+                className="rounded-lg bg-cream-deep/60 p-5 border border-[color:var(--rule)] hover:border-coral/40 transition-colors"
+              >
+                <dt className="font-mono text-[0.68rem] uppercase tracking-widest text-ink-soft">
+                  {spec.label}
+                </dt>
+                <dd className="mt-2 font-display text-xl text-ink leading-snug">
+                  {spec.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
         </section>
       )}
 

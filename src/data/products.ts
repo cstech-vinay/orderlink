@@ -28,6 +28,13 @@ export type Product = {
   itemPricePaise: number; // what customer pays for the item (POD: in cash at delivery)
   itemPrepaidPricePaise: number; // itemPricePaise × 0.95 rounded to nearest ₹
 
+  // When true, the headline price the customer sees (on cards, PDP, ads) is the
+  // all-inclusive total — i.e. itemPricePaise + SHIPPING_PAISE. The checkout
+  // summary still breaks it down as item + shipping, so GST + accounting stay
+  // clean, but nothing is added on top at the till — the customer pays exactly
+  // what the creatives advertised.
+  shippingIncluded?: boolean;
+
   hsnCode: string;
   gstRatePercent: number;
 
@@ -37,6 +44,21 @@ export type Product = {
   description: string;
   specs: { label: string; value: string }[];
   startingInventory: number;
+
+  // Optional PDP storytelling blocks — rendered as dedicated sections on the
+  // product detail page when present. Keep them OPTIONAL so legacy products
+  // without this content don't break.
+  scenarios?: {
+    title: string;
+    body: string;
+    imageSrc?: string;
+    imageAlt?: string;
+  }[];
+  howItWorks?: {
+    step: number;
+    title: string;
+    body: string;
+  }[];
 
   meeshoRating?: number;
   meeshoReviewCount?: number;
@@ -53,37 +75,76 @@ export const products: Product[] = [
   // === KITCHEN ===
   {
     slug: "oil-dispenser",
-    title: "Premium Glass Oil Dispenser — 500ml",
+    title: "Duck Oil & Brush Bottle — 200ml",
     category: "kitchen",
     categoryLabel: "Kitchen",
     status: "live",
-    mrpPaise: 29900,
-    itemPricePaise: 15000,
-    itemPrepaidPricePaise: discount5(15000),
+    // ₹499 is the all-in advertised price (creatives promise "incl. shipping").
+    // Internally: ₹450 item + ₹49 shipping = ₹499 total paid by customer.
+    shippingIncluded: true,
+    mrpPaise: 79900,
+    itemPricePaise: 45000,
+    itemPrepaidPricePaise: discount5(45000),
     hsnCode: "7013",
     gstRatePercent: 18,
     images: [
-      { src: "/assets/products/oil-dispenser/1.webp", alt: "Oil dispenser front view", width: 1200, height: 1500 },
-      { src: "/assets/products/oil-dispenser/2.webp", alt: "Oil dispenser side view", width: 1200, height: 1500 },
-      { src: "/assets/products/oil-dispenser/3.webp", alt: "Wood cork detail", width: 1200, height: 1500 },
-      { src: "/assets/products/oil-dispenser/4.webp", alt: "Scale reference on kitchen counter", width: 1200, height: 1500 },
+      { src: "/assets/products/oil-dispenser/thumbnail.webp", alt: "Duck-shaped silicone oil brush bottle with golden oil on warm cream backdrop", width: 1200, height: 1500 },
+      { src: "/assets/products/oil-dispenser/pdp-01.webp", alt: "Duck oil & brush bottle — hero cover", width: 1200, height: 1200 },
+      { src: "/assets/products/oil-dispenser/pdp-02.webp", alt: "Four reasons you'll love it — features at a glance", width: 1200, height: 1200 },
+      { src: "/assets/products/oil-dispenser/pdp-03.webp", alt: "Dimensions and specs — 200ml, 17cm tall, 7cm diameter", width: 1200, height: 1200 },
+      { src: "/assets/products/oil-dispenser/pdp-04.webp", alt: "One bottle, many uses — BBQ, salads, everyday cooking, baking", width: 1200, height: 1200 },
+      { src: "/assets/products/oil-dispenser/pdp-05.webp", alt: "How it works — three steps, zero mess", width: 1200, height: 1200 },
+      { src: "/assets/products/oil-dispenser/pdp-06.webp", alt: "Why the duck bottle — comparison and ₹499 price", width: 1200, height: 1200 },
     ],
-    shortSubtitle: "500ml · glass & wood cork",
+    shortSubtitle: "200ml · glass jar + silicone brush",
     bullets: [
-      "Non-drip precision pour spout",
-      "500ml borosilicate glass body",
-      "Hand-finished wood cork stopper",
-      "Fits comfortably on any counter",
+      "Silicone brush lives inside the jar — no extra tool",
+      "Clear glass body so you always see the oil level",
+      "Dishwasher-safe, food-grade silicone duck brush",
+      "Built-in portion control — less pouring, even coat",
     ],
     description:
-      "A dispenser that earns its place on the counter. Borosilicate glass keeps oil fresh, the wood cork seals smoothly, and the pour spout is engineered not to drip. Everyday utility without the plastic-shelf-pharmacy aesthetic.",
+      "Every kitchen has the same small problem: the oil bottle is in one place, the pastry brush is in another, and by the time you've found both you've already dripped on the counter. This little jar just solves it — a food-grade silicone brush lives inside the glass, always coated, always ready.\n\nLift the lid and the brush comes out already glazed with oil. Run it across a roti, a paratha, a tray of skewers, a cake tin, a hot pan — even coat, no drips, nothing extra to wash up. The clear borosilicate glass lets you see how much oil is left at a glance, and because the brush does the pouring for you, you end up using measurably less oil per meal without thinking about it.\n\n200ml capacity, 17cm tall, weighs almost nothing on the shelf. The silicone duck head pops out for the dishwasher; the glass rinses under warm water in seconds. Heat-safe and non-reactive — so it's equally happy with everyday refined oil, your good olive oil, desi ghee, or mustard oil pulled out for the weekend fish fry.\n\nComes in two colourways — a warm mustard yellow or a soft off-white — both with the signature duck-shaped brush. Fair warning: it becomes the most-photographed thing on the counter within a week.\n\nSmall jar. Big kitchen energy. The kind of quiet upgrade you don't notice you needed until the day you already have it.",
     specs: [
-      { label: "Capacity", value: "500 ml" },
-      { label: "Material", value: "Borosilicate glass + wood cork" },
-      { label: "Care", value: "Hand-wash with warm water" },
-      { label: "Dimensions", value: "H 22 cm × D 7 cm" },
+      { label: "Capacity", value: "200 ml" },
+      { label: "Material", value: "Borosilicate glass + food-grade silicone" },
+      { label: "Dimensions", value: "H 17 cm × D 7 cm" },
+      { label: "Weight", value: "180 g" },
+      { label: "Colours", value: "Yellow or white (pick at checkout)" },
+      { label: "Care", value: "Brush is dishwasher-safe; rinse glass by hand" },
     ],
     startingInventory: 50,
+    scenarios: [
+      {
+        title: "Sunday paratha stack",
+        body: "Glaze between layers so they stay soft all morning — no ghee bowl, no wooden spoon to wash.",
+        imageSrc: "/assets/products/oil-dispenser/scenario-01.webp",
+        imageAlt: "Yellow duck oil brush glazing a paratha on a warm wooden counter",
+      },
+      {
+        title: "Grill night",
+        body: "Lacquer paneer tikka or vegetable skewers right before they hit the flame — even coat, no dunking.",
+        imageSrc: "/assets/products/oil-dispenser/scenario-02.webp",
+        imageAlt: "Yellow duck oil brush lacquering paneer tikka skewers on a grill pan",
+      },
+      {
+        title: "Salad finish",
+        body: "A final whisper of olive oil over the leaves — dressing without drowning.",
+        imageSrc: "/assets/products/oil-dispenser/scenario-03.webp",
+        imageAlt: "White duck oil brush finishing a glass bowl of fresh salad with olive oil",
+      },
+      {
+        title: "Cake tins & trays",
+        body: "Grease evenly in seconds — no wasteful pour, no paper towel, no sticky fingertip.",
+        imageSrc: "/assets/products/oil-dispenser/scenario-04.webp",
+        imageAlt: "Yellow duck oil brush greasing a round cake tin evenly",
+      },
+    ],
+    howItWorks: [
+      { step: 1, title: "Fill with oil", body: "Unscrew the lid, pour up to 200 ml through the wide mouth." },
+      { step: 2, title: "Lift the duck brush", body: "The silicone brush is always coated — no dipping, no second tool." },
+      { step: 3, title: "Brush & cook", body: "Even coat on roti, paratha, skewers, pans — no drips, no dirty brush holder." },
+    ],
     meeshoRating: 4.0,
     meeshoReviewCount: 42170,
     meeshoRatingDistribution: [

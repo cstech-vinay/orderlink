@@ -1,0 +1,97 @@
+{
+  "slug": "oil-dispenser",
+  "generatedAt": "2026-04-20T09:59:12.664Z",
+  "model": "gemini-3.1-flash-image-preview",
+  "results": [
+    {
+      "id": "thumbnail",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\thumbnail.webp"
+    },
+    {
+      "id": "pdp-01",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-01.webp"
+    },
+    {
+      "id": "pdp-02",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-02.webp"
+    },
+    {
+      "id": "pdp-03",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-03.webp"
+    },
+    {
+      "id": "pdp-04",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-04.webp"
+    },
+    {
+      "id": "pdp-05",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-05.webp"
+    },
+    {
+      "id": "pdp-06",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\pdp-06.webp"
+    },
+    {
+      "id": "feed-01",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\feed-01.webp"
+    },
+    {
+      "id": "feed-02",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\feed-02.webp"
+    },
+    {
+      "id": "feed-03",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\feed-03.webp"
+    },
+    {
+      "id": "story-01",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\story-01.webp"
+    },
+    {
+      "id": "story-02",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\story-02.webp"
+    },
+    {
+      "id": "story-03",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\story-03.webp"
+    },
+    {
+      "id": "scenario-01",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\scenario-01.webp"
+    },
+    {
+      "id": "scenario-02",
+      "status": "ok",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\scenario-02.webp",
+      "raw": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\generated\\scenario-02.png",
+      "kind": "scenario",
+      "alt": "Yellow duck oil brush lacquering paneer tikka skewers on a grill pan",
+      "outWidth": 800,
+      "outHeight": 800
+    },
+    {
+      "id": "scenario-03",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\scenario-03.webp"
+    },
+    {
+      "id": "scenario-04",
+      "status": "skipped",
+      "webp": "D:\\My Files\\Projects\\Others\\AI Projects\\Dropshipping\\public\\assets\\products\\oil-dispenser\\scenario-04.webp"
+    }
+  ]
+}

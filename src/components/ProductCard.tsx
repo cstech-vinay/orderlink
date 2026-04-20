@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Product } from "@/data/products";
 import { SHIPPING_PAISE } from "@/data/products";
+import { getHeadlinePricePaise, getDisplayDiscountPercent } from "@/lib/pricing";
 import { ComingSoonBadge } from "./ComingSoonBadge";
 
 function rupees(paise: number): string {
@@ -11,10 +12,8 @@ function rupees(paise: number): string {
 export function ProductCard({ product }: { product: Product }) {
   const isLive = product.status === "live";
   const hasImage = product.images.length > 0;
-  const discountPercent =
-    product.mrpPaise > product.itemPricePaise
-      ? Math.round(((product.mrpPaise - product.itemPricePaise) / product.mrpPaise) * 100)
-      : 0;
+  const headlinePricePaise = getHeadlinePricePaise(product);
+  const discountPercent = getDisplayDiscountPercent(product);
 
   const cardContent = (
     <>
@@ -47,9 +46,9 @@ export function ProductCard({ product }: { product: Product }) {
             <>
               <div className="flex items-baseline gap-2">
                 <span className="font-display text-2xl font-semibold text-coral">
-                  {rupees(product.itemPricePaise)}
+                  {rupees(headlinePricePaise)}
                 </span>
-                {product.mrpPaise > product.itemPricePaise && (
+                {product.mrpPaise > headlinePricePaise && (
                   <>
                     <span className="font-sans text-sm text-ink-soft line-through">
                       {rupees(product.mrpPaise)}
@@ -61,7 +60,9 @@ export function ProductCard({ product }: { product: Product }) {
                 )}
               </div>
               <p className="font-sans text-xs text-ink-soft/80 mt-1">
-                + {rupees(SHIPPING_PAISE)} shipping &middot; non-refundable
+                {product.shippingIncluded
+                  ? "Shipping included \u00b7 all-India"
+                  : <>+ {rupees(SHIPPING_PAISE)} shipping &middot; non-refundable</>}
               </p>
               {product.meeshoReviewCount && (
                 <p className="font-mono text-[0.7rem] text-ink-soft/80 mt-1">
