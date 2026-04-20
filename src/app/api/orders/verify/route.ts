@@ -86,6 +86,15 @@ export async function POST(request: Request) {
     console.error("[verify] invoice generation failed:", err);
   }
 
+  // Record coupon redemption if the order used one. Payload decrypt mirrors
+  // invoice gen; kept separate so a PDF failure doesn't block redemption
+  // tracking (and vice versa).
+  try {
+    await recordCouponIfUsed(order.id);
+  } catch (err) {
+    console.error("[verify] coupon redemption record failed:", err);
+  }
+
   // Salesforce sync is already enqueued in pending_sf_sync (from POST /api/orders).
   // The SF worker (T30) will: upsert Person Account + Order, upload the PDF
   // as ContentVersion, and trigger the SF Flow that emails the customer.
@@ -178,4 +187,29 @@ async function generateAndStoreInvoice(
     .update(schema.ordersRef)
     .set({ invoicePdfPath: pdfPath })
     .where(eq(schema.ordersRef.id, orderId));
+}
+
+async function recordCouponIfUsed(orderId: string): Promise<void> {
+  const { decryptJSON } = await import("@/lib/crypto");
+  const { recordCouponRedemption } = await import("@/lib/coupons");
+
+  const [pending] = await db
+    .select()
+    .from(schema.pendingSfSync)
+    .where(eq(schema.pendingSfSync.orderRefId, orderId))
+    .limit(1);
+  if (!pending) return;
+
+  const payload = decryptJSON<{ couponCode?: string; email: string }>({
+    ciphertext: Buffer.from(pending.payloadCiphertext as unknown as Buffer),
+    iv: pending.payloadIv,
+    tag: pending.payloadTag,
+  });
+
+  if (!payload.couponCode) return; // no coupon used
+  await recordCouponRedemption({
+    couponCode: payload.couponCode,
+    orderRefId: orderId,
+    email: payload.email,
+  });
 }

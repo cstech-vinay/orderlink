@@ -18,6 +18,7 @@ import { InYourKitchen } from "@/components/InYourKitchen";
 import { HowItWorksRibbon } from "@/components/HowItWorksRibbon";
 import { FOMOLines } from "@/components/FOMOLines";
 import { BackInStockCapture } from "@/components/BackInStockCapture";
+import { ExitIntentOverlay } from "@/components/ExitIntentOverlay";
 import {
   getAverageRating,
   getReviewCount,
@@ -170,6 +171,7 @@ export default async function ProductPage({
       </div>
 
       {isLive && <ActivityPopup productTitle={product.title} />}
+      {isLive && !soldOut && <ExitIntentOverlay />}
 
       {isLive && product.howItWorks && product.howItWorks.length > 0 && (
         <HowItWorksRibbon steps={product.howItWorks} />

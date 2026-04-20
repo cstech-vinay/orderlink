@@ -88,12 +88,28 @@ export async function POST(request: Request) {
   }
 
   try {
-    // 5. Compute totals (T9 pure pricing lib)
+    // 5. Validate + apply coupon if one was supplied. Invalid/expired/used codes
+    //    are silently ignored at this layer — the client already validated via
+    //    /api/coupons/validate pre-submit, so reaching here with a bad code is
+    //    edge-case (stale UI, expired between tabs). Better to let the order
+    //    through at list price than fail the checkout.
+    let couponDiscountPaise = 0;
+    let appliedCouponCode: string | null = null;
+    if (input.couponCode) {
+      const { validateCoupon } = await import("@/lib/coupons");
+      const v = await validateCoupon({ code: input.couponCode, email: input.email });
+      if (v.ok) {
+        couponDiscountPaise = v.amountPaise;
+        appliedCouponCode = v.code;
+      }
+    }
+
+    // 6. Compute totals (T9 pure pricing lib)
     const amounts = calculateOrderAmounts({
       itemPricePaise: product.itemPricePaise,
       itemPrepaidPricePaise: product.itemPrepaidPricePaise,
       method: input.paymentMethod,
-      couponDiscountPaise: 0, // coupons land in T37
+      couponDiscountPaise,
     });
 
     // 6. Gap-free order + invoice numbers via Postgres sequences
@@ -138,7 +154,14 @@ export async function POST(request: Request) {
 
     // 9. Stash the full PII payload encrypted. T28 reads + drains this row
     //    when syncing to Salesforce (Person Account + Order + ContentVersion invoice).
-    const enc = encryptJSON({ ...input, orderNumber, invoiceNumber });
+    //    Overwrite couponCode with the validated value (or null if invalid)
+    //    so verify route records redemptions only for valid coupons.
+    const enc = encryptJSON({
+      ...input,
+      couponCode: appliedCouponCode ?? undefined,
+      orderNumber,
+      invoiceNumber,
+    });
     await db.insert(schema.pendingSfSync).values({
       orderRefId: refRow.id,
       payloadCiphertext: enc.ciphertext,

@@ -93,6 +93,12 @@ function CheckoutInner() {
   const [mobileVerified, setMobileVerified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [couponStatus, setCouponStatus] = useState<
+    | { state: "idle" }
+    | { state: "checking" }
+    | { state: "valid"; amountPaise: number; code: string }
+    | { state: "invalid"; error: string }
+  >({ state: "idle" });
 
   const amounts = useMemo(() => {
     if (!product) return null;
@@ -100,9 +106,10 @@ function CheckoutInner() {
       itemPricePaise: product.itemPricePaise,
       itemPrepaidPricePaise: product.itemPrepaidPricePaise,
       method: paymentMethod,
-      couponDiscountPaise: 0,
+      couponDiscountPaise:
+        couponStatus.state === "valid" ? couponStatus.amountPaise : 0,
     });
-  }, [product, paymentMethod]);
+  }, [product, paymentMethod, couponStatus]);
 
   const handlePincodeResult = useCallback(
     (r: { serviceable: boolean; city?: string; state?: string }) => {
@@ -334,16 +341,87 @@ function CheckoutInner() {
             <label className="block font-sans text-sm text-ink-soft">
               Have a coupon code? (optional)
             </label>
-            <input
-              type="text"
-              value={form.couponCode}
-              onChange={(e) =>
-                setForm({ ...form, couponCode: e.target.value.toUpperCase() })
-              }
-              className="w-full rounded-md border border-[color:var(--rule)] px-3 py-2 font-mono tracking-widest uppercase"
-              maxLength={20}
-              placeholder="WELCOME10"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={form.couponCode}
+                onChange={(e) => {
+                  setForm({ ...form, couponCode: e.target.value.toUpperCase() });
+                  setCouponStatus({ state: "idle" });
+                }}
+                className="flex-1 rounded-md border border-[color:var(--rule)] px-3 py-2 font-mono tracking-widest uppercase focus:outline-none focus:border-coral"
+                maxLength={20}
+                placeholder="WELCOME10"
+              />
+              <button
+                type="button"
+                disabled={
+                  !form.couponCode ||
+                  !/.+@.+\..+/.test(form.email) ||
+                  couponStatus.state === "checking"
+                }
+                onClick={async () => {
+                  setCouponStatus({ state: "checking" });
+                  try {
+                    const res = await fetch("/api/coupons/validate", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        code: form.couponCode,
+                        email: form.email,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                      setCouponStatus({
+                        state: "valid",
+                        amountPaise: data.amountPaise,
+                        code: data.code,
+                      });
+                    } else {
+                      setCouponStatus({
+                        state: "invalid",
+                        error:
+                          data.error === "unknown_code"
+                            ? "Unknown code"
+                            : data.error === "expired"
+                              ? "This code has expired"
+                              : data.error === "already_used"
+                                ? "You've already used this code"
+                                : data.error === "max_uses_reached"
+                                  ? "This code is fully redeemed"
+                                  : "Couldn't apply this code",
+                      });
+                    }
+                  } catch {
+                    setCouponStatus({
+                      state: "invalid",
+                      error: "Network error. Try again.",
+                    });
+                  }
+                }}
+                className="rounded-md border border-coral text-coral font-sans text-sm font-medium px-4 py-2 hover:bg-coral/5 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {couponStatus.state === "checking" ? "…" : "Apply"}
+              </button>
+            </div>
+            {couponStatus.state === "valid" && (
+              <p className="font-sans text-xs text-green-700">
+                ✓ Code <strong>{couponStatus.code}</strong> applied &mdash;{" "}
+                <strong>₹{couponStatus.amountPaise / 100}</strong> off.
+              </p>
+            )}
+            {couponStatus.state === "invalid" && (
+              <p className="font-sans text-xs text-coral">{couponStatus.error}</p>
+            )}
+            {couponStatus.state === "checking" && (
+              <p className="font-sans text-xs text-ink-soft">Checking…</p>
+            )}
+            {couponStatus.state === "idle" && form.couponCode && (
+              <p className="font-sans text-xs text-ink-soft/70">
+                Enter your email first, then click Apply.
+              </p>
+            )}
           </section>
 
           <SalesforceTrustStrip />
