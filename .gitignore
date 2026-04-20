@@ -32,3 +32,9 @@ data/invoices/
 public/assets/products/*/generated/
 assets/products/*/generated/
 
+# === Salesforce JWT private key — NEVER commit. Public cert (.crt) is fine to keep. ===
+certs/sf-jwt.key
+certs/*.pem
+certs/*.p12
+certs/*.pfx
+

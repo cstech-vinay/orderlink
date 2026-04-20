@@ -46,9 +46,11 @@ export const ordersRef = pgTable("orders_ref", {
 
 export const pendingSfSync = pgTable("pending_sf_sync", {
   id: uuid("id").primaryKey().defaultRandom(),
-  orderRefId: uuid("order_ref_id")
-    .notNull()
-    .references(() => ordersRef.id, { onDelete: "cascade" }),
+  // Nullable because restock_signup_sync jobs are not tied to an order.
+  // Cascade still fires on non-null values when an order_ref row is deleted.
+  orderRefId: uuid("order_ref_id").references(() => ordersRef.id, {
+    onDelete: "cascade",
+  }),
   payloadCiphertext: bytea("payload_ciphertext").notNull(),
   payloadIv: text("payload_iv").notNull(),
   payloadTag: text("payload_tag").notNull(),

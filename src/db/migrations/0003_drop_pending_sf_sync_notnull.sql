@@ -1,0 +1,1 @@
+ALTER TABLE "pending_sf_sync" ALTER COLUMN "order_ref_id" DROP NOT NULL;

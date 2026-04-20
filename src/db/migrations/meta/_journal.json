@@ -22,6 +22,13 @@
       "when": 1776662260401,
       "tag": "0002_order_number_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776703558888,
+      "tag": "0003_drop_pending_sf_sync_notnull",
+      "breakpoints": true
     }
   ]
 }

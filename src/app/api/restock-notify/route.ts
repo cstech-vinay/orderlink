@@ -40,6 +40,7 @@ export async function POST(request: Request) {
   }
 
   const { productSlug, email } = parsed.data;
+  const normalizedEmail = email.toLowerCase();
 
   // Deduplicate quietly — returning the same {ok:true} whether this is a new
   // signup or an existing one. Also preserves privacy (no "email already
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
     .where(
       and(
         eq(schema.restockNotifications.productSlug, productSlug),
-        eq(schema.restockNotifications.email, email.toLowerCase())
+        eq(schema.restockNotifications.email, normalizedEmail)
       )
     )
     .limit(1);
@@ -58,7 +59,26 @@ export async function POST(request: Request) {
   if (existing.length === 0) {
     await db.insert(schema.restockNotifications).values({
       productSlug,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
+    });
+
+    // Enqueue SF sync. The pending_sf_sync worker (T30) drains this
+    // asynchronously; if SF is unreachable/disabled, the PG mirror above
+    // still holds the signup so no data is lost.
+    const { encryptJSON } = await import("@/lib/crypto");
+    const product = (await import("@/data/products")).getProductBySlug(productSlug);
+    const enc = encryptJSON({
+      productSlug,
+      productTitle: product?.title ?? productSlug,
+      email: normalizedEmail,
+    });
+    await db.insert(schema.pendingSfSync).values({
+      orderRefId: null,
+      payloadCiphertext: enc.ciphertext,
+      payloadIv: enc.iv,
+      payloadTag: enc.tag,
+      jobKind: "restock_signup_sync",
+      status: "pending",
     });
   }
 
