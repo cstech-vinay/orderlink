@@ -9,6 +9,7 @@ import { ProductGallery } from "@/components/ProductGallery";
 import { TrustBand } from "@/components/TrustBand";
 import { ReviewDistribution } from "@/components/ReviewDistribution";
 import { ComingSoonBadge } from "@/components/ComingSoonBadge";
+import { WhatsAppButton } from "@/components/WhatsAppButton";
 
 export const dynamicParams = false;
 
@@ -111,6 +112,16 @@ export default async function ProductPage({
                 <li>&#128274; Secure payment via Razorpay</li>
                 <li>&#9201; Only {product.startingInventory} left</li>
               </ul>
+
+              <p className="font-sans text-sm text-ink-soft">
+                Unsure if this is right for you?{" "}
+                <WhatsAppButton
+                  variant="inline"
+                  prefill={`Hi%20OrderLink%2C%20I'm%20looking%20at%20${encodeURIComponent(product.title)}%20and%20have%20a%20quick%20question`}
+                  label="WhatsApp us"
+                />{" "}
+                &mdash; we&apos;ll help in minutes.
+              </p>
             </>
           ) : (
             <>
