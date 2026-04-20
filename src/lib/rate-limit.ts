@@ -37,3 +37,7 @@ export function createRateLimiter(opts: RateLimiterOptions) {
 export const otpSendByMobile = createRateLimiter({ max: 3, windowMs: 15 * 60_000 });
 export const otpSendByIp = createRateLimiter({ max: 10, windowMs: 15 * 60_000 });
 export const otpVerifyByMobile = createRateLimiter({ max: 5, windowMs: 10 * 60_000 });
+
+// Track page — 5 lookups per IP per hour. Deters brute-force enumeration of
+// the (order#, last-4-mobile) tuple.
+export const trackByIp = createRateLimiter({ max: 5, windowMs: 60 * 60_000 });
