@@ -36,33 +36,37 @@ export async function POST(request: Request) {
   }
   const input = parsed.data;
 
-  // 2. Gate on OTP-verified cookie (T14.5). The cookie was set by /api/otp/verify
-  //    and is bound to input.mobile via HMAC.
-  const secret = otpSecret();
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "server_misconfigured" },
-      { status: 500 }
-    );
-  }
-  const otpCookie = readCookie(request, OTP_COOKIE_NAME);
-  if (!otpCookie) {
-    return NextResponse.json(
-      { ok: false, error: "mobile_not_verified" },
-      { status: 401 }
-    );
-  }
-  const otpCheck = verifyOtpToken({
-    token: otpCookie,
-    mobile: input.mobile,
-    secret,
-    now: Date.now(),
-  });
-  if (!otpCheck.ok) {
-    return NextResponse.json(
-      { ok: false, error: "otp_invalid", reason: otpCheck.reason },
-      { status: 401 }
-    );
+  // 2. Gate on OTP-verified cookie (T14.5) — only when flag is on.
+  //    Phase 2a launches with the gate off: POD requires ₹49 advance via Razorpay
+  //    and prepaid requires full payment, so fake-order abuse still costs the
+  //    fraudster money. Flip NEXT_PUBLIC_OTP_GATE_ENABLED=true to re-enable.
+  if (process.env.NEXT_PUBLIC_OTP_GATE_ENABLED === "true") {
+    const secret = otpSecret();
+    if (!secret) {
+      return NextResponse.json(
+        { ok: false, error: "server_misconfigured" },
+        { status: 500 }
+      );
+    }
+    const otpCookie = readCookie(request, OTP_COOKIE_NAME);
+    if (!otpCookie) {
+      return NextResponse.json(
+        { ok: false, error: "mobile_not_verified" },
+        { status: 401 }
+      );
+    }
+    const otpCheck = verifyOtpToken({
+      token: otpCookie,
+      mobile: input.mobile,
+      secret,
+      now: Date.now(),
+    });
+    if (!otpCheck.ok) {
+      return NextResponse.json(
+        { ok: false, error: "otp_invalid", reason: otpCheck.reason },
+        { status: 401 }
+      );
+    }
   }
 
   // 3. Product must exist and be live for purchase

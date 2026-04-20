@@ -49,7 +49,7 @@ const baseInput = {
   paymentMethod: "prepaid" as const,
 };
 
-describe.skipIf(!hasDb)("POST /api/orders", () => {
+describe.skipIf(!hasDb)("POST /api/orders — OTP gate ON", () => {
   let POST: typeof import("@/app/api/orders/route").POST;
   let db: typeof import("@/db/client").db;
   let schema: typeof import("@/db/client").schema;
@@ -62,6 +62,7 @@ describe.skipIf(!hasDb)("POST /api/orders", () => {
   });
 
   beforeEach(async () => {
+    process.env.NEXT_PUBLIC_OTP_GATE_ENABLED = "true";
     await db.execute(sql`DELETE FROM pending_sf_sync`);
     await db.execute(sql`DELETE FROM orders_ref`);
     await db.execute(sql`DELETE FROM inventory WHERE product_slug = 'oil-dispenser'`);
@@ -160,5 +161,52 @@ describe.skipIf(!hasDb)("POST /api/orders", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBe("product_unavailable");
+  });
+});
+
+describe.skipIf(!hasDb)("POST /api/orders — OTP gate OFF (Phase 2a default)", () => {
+  let POST: typeof import("@/app/api/orders/route").POST;
+  let db: typeof import("@/db/client").db;
+  let schema: typeof import("@/db/client").schema;
+  let sql: typeof import("drizzle-orm").sql;
+
+  beforeAll(async () => {
+    ({ POST } = await import("@/app/api/orders/route"));
+    ({ db, schema } = await import("@/db/client"));
+    ({ sql } = await import("drizzle-orm"));
+  });
+
+  beforeEach(async () => {
+    process.env.NEXT_PUBLIC_OTP_GATE_ENABLED = "false";
+    await db.execute(sql`DELETE FROM pending_sf_sync`);
+    await db.execute(sql`DELETE FROM orders_ref`);
+    await db.execute(sql`DELETE FROM inventory WHERE product_slug = 'oil-dispenser'`);
+    await db.insert(schema.inventory).values({
+      productSlug: "oil-dispenser",
+      remaining: 5,
+      reserved: 0,
+    });
+    await db.execute(sql`ALTER SEQUENCE invoice_sequence RESTART WITH 1`);
+    await db.execute(sql`ALTER SEQUENCE order_number_sequence RESTART WITH 1`);
+  });
+
+  it("creates order WITHOUT any OTP cookie", async () => {
+    const res = await POST(buildRequest(baseInput)); // no Cookie header
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.orderNumber).toBe("OL-2026-0001");
+  });
+
+  it("creates order even if the cookie is for a different mobile", async () => {
+    // With gate off, server must not care about the cookie at all.
+    const res = await POST(buildRequest(baseInput, validOtpCookie("9000000000")));
+    expect(res.status).toBe(200);
+  });
+
+  it("still validates checkout input (pincode) + 409s out_of_stock", async () => {
+    await db.execute(sql`UPDATE inventory SET remaining = 0 WHERE product_slug = 'oil-dispenser'`);
+    const res = await POST(buildRequest(baseInput));
+    expect(res.status).toBe(409);
   });
 });

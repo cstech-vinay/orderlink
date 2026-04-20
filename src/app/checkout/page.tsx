@@ -215,9 +215,11 @@ function CheckoutInner() {
     return <CheckoutFallback />;
   }
 
+  const otpGateEnabled = process.env.NEXT_PUBLIC_OTP_GATE_ENABLED === "true";
+
   const canSubmit =
     pincodeServiceable === true &&
-    mobileVerified &&
+    (!otpGateEnabled || mobileVerified) &&
     form.fullName.trim().length >= 2 &&
     /^[6-9]\d{9}$/.test(form.mobile) &&
     /.+@.+\..+/.test(form.email) &&
@@ -242,12 +244,26 @@ function CheckoutInner() {
               value={form.fullName}
               onChange={(v) => setForm({ ...form, fullName: v })}
             />
-            <MobileVerifier
-              value={form.mobile}
-              onChange={(v) => setForm((f) => ({ ...f, mobile: v }))}
-              verified={mobileVerified}
-              onVerified={setMobileVerified}
-            />
+            {otpGateEnabled ? (
+              <MobileVerifier
+                value={form.mobile}
+                onChange={(v) => setForm((f) => ({ ...f, mobile: v }))}
+                verified={mobileVerified}
+                onVerified={setMobileVerified}
+              />
+            ) : (
+              <Input
+                label="Mobile (10-digit)"
+                required
+                value={form.mobile}
+                onChange={(v) =>
+                  setForm({ ...form, mobile: v.replace(/\D/g, "").slice(0, 10) })
+                }
+                help="Used for delivery SMS updates from Meesho."
+                inputMode="numeric"
+                maxLength={10}
+              />
+            )}
             <Input
               label="Email"
               type="email"
