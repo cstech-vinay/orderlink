@@ -51,6 +51,10 @@ services:
       - .:/app
       - orderlink_node_modules:/app/node_modules
       - orderlink_next_cache:/app/.next
+      # Invoice PDFs generated on payment success — visible on the host for
+      # inspection. In prod (docker-compose.store.yml) this is the authoritative
+      # local cache fallback when Salesforce Files is temporarily unreachable.
+      - ./data/invoices:/app/data/invoices
 
 volumes:
   orderlink_pg_data:
