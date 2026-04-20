@@ -4,6 +4,7 @@ import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { AttributionCapture } from "@/components/AttributionCapture";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
+import { CookieBanner } from "@/components/CookieBanner";
 import "./globals.css";
 
 const fraunces = Fraunces({
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="flex-1">{children}</div>
         <Footer />
         <WhatsAppButton />
+        <CookieBanner />
       </body>
     </html>
   );
