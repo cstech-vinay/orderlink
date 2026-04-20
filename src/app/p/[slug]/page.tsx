@@ -10,6 +10,7 @@ import { TrustBand } from "@/components/TrustBand";
 import { ReviewDistribution } from "@/components/ReviewDistribution";
 import { ComingSoonBadge } from "@/components/ComingSoonBadge";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
+import { ActivityPopup } from "@/components/ActivityPopup";
 
 export const dynamicParams = false;
 
@@ -133,6 +134,8 @@ export default async function ProductPage({
           )}
         </div>
       </div>
+
+      {isLive && <ActivityPopup productTitle={product.title} />}
 
       {isLive && product.description && (
         <section className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-12">

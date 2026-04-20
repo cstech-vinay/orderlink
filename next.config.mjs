@@ -7,6 +7,9 @@ const nextConfig = {
   experimental: {
     serverActions: { bodySizeLimit: "1mb" },
   },
+  env: {
+    NEXT_PUBLIC_FOMO_POPUP_ENABLED: process.env.FOMO_POPUP_ENABLED ?? "true",
+  },
   async headers() {
     return [
       {
