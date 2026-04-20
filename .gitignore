@@ -25,3 +25,6 @@ coverage/
 playwright-report/
 test-results/
 
+# === Generated invoices (local runs) ===
+data/invoices/
+
