@@ -1,5 +1,19 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { signOtpToken, otpSecret, OTP_COOKIE_NAME } from "@/lib/otp-token";
+import { getProductBySlug, SHIPPING_PAISE } from "@/data/products";
+import { calculateOrderAmounts } from "@/lib/pricing";
+
+// Tests compute expected totals from the live catalog so they're price-independent —
+// editing src/data/products.ts doesn't invalidate assertions.
+const OIL = getProductBySlug("oil-dispenser")!;
+const PREPAID_AMOUNT = calculateOrderAmounts({
+  itemPricePaise: OIL.itemPricePaise,
+  itemPrepaidPricePaise: OIL.itemPrepaidPricePaise,
+  method: "prepaid",
+  couponDiscountPaise: 0,
+}).advancePaise;
+const POD_ADVANCE = SHIPPING_PAISE;
+const POD_BALANCE = OIL.itemPricePaise;
 
 const hasDb = Boolean(process.env.DATABASE_URL) && process.env.DATABASE_URL !== "";
 
@@ -82,9 +96,7 @@ describe.skipIf(!hasDb)("POST /api/orders — OTP gate ON", () => {
     expect(body.ok).toBe(true);
     expect(body.orderNumber).toBe("OL-2026-0001");
     expect(body.razorpayOrderId).toBe("order_test_OL-2026-0001");
-    // Oil Dispenser: mrp 29900 → item 15000 → prepaid 14300 (discount5 rounds to nearest ₹1)
-    // + shipping 4900 = advance 19200 (₹192)
-    expect(body.amountPaise).toBe(19200);
+    expect(body.amountPaise).toBe(PREPAID_AMOUNT);
 
     // orders_ref row written, pending_sf_sync row written
     const refs = await db.select().from(schema.ordersRef);
@@ -107,11 +119,11 @@ describe.skipIf(!hasDb)("POST /api/orders — OTP gate ON", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.amountPaise).toBe(4900);
+    expect(body.amountPaise).toBe(POD_ADVANCE);
 
     const refs = await db.select().from(schema.ordersRef);
     expect(refs[0].status).toBe("pending_advance");
-    expect(refs[0].balanceDuePaise).toBe(15000);
+    expect(refs[0].balanceDuePaise).toBe(POD_BALANCE);
   });
 
   it("returns 409 out_of_stock when inventory is exhausted", async () => {

@@ -52,7 +52,9 @@ describe("products catalog", () => {
   });
 
   it("getProductBySlug returns product or undefined", () => {
-    expect(getProductBySlug("oil-dispenser")?.title).toContain("Oil Dispenser");
+    const oil = getProductBySlug("oil-dispenser");
+    expect(oil).toBeDefined();
+    expect(oil?.slug).toBe("oil-dispenser");
     expect(getProductBySlug("nonexistent")).toBeUndefined();
   });
 

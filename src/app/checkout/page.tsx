@@ -217,15 +217,21 @@ function CheckoutInner() {
 
   const otpGateEnabled = process.env.NEXT_PUBLIC_OTP_GATE_ENABLED === "true";
 
-  const canSubmit =
-    pincodeServiceable === true &&
-    (!otpGateEnabled || mobileVerified) &&
-    form.fullName.trim().length >= 2 &&
-    /^[6-9]\d{9}$/.test(form.mobile) &&
-    /.+@.+\..+/.test(form.email) &&
-    form.addressLine1.trim().length >= 5 &&
-    form.city.trim().length >= 2 &&
-    form.state.trim().length >= 2;
+  const missingFields: string[] = [];
+  if (form.fullName.trim().length < 2) missingFields.push("full name");
+  if (!/^[6-9]\d{9}$/.test(form.mobile))
+    missingFields.push("10-digit mobile starting 6–9");
+  if (otpGateEnabled && !mobileVerified) missingFields.push("mobile OTP verification");
+  if (!/.+@.+\..+/.test(form.email)) missingFields.push("valid email");
+  if (form.addressLine1.trim().length < 5) missingFields.push("address line 1");
+  if (!/^\d{6}$/.test(form.pincode)) missingFields.push("6-digit pincode");
+  else if (pincodeServiceable === null) missingFields.push("pincode check (still loading)");
+  else if (pincodeServiceable === false)
+    missingFields.push("a serviceable pincode (we don't ship here yet)");
+  if (form.city.trim().length < 2) missingFields.push("city");
+  if (form.state.trim().length < 2) missingFields.push("state");
+
+  const canSubmit = missingFields.length === 0;
 
   return (
     <main className="max-w-6xl mx-auto px-6 py-12">
@@ -345,6 +351,18 @@ function CheckoutInner() {
             amounts={amounts}
             onSubmit={handleSubmit}
           />
+          {!canSubmit && missingFields.length > 0 && (
+            <div className="mt-3 rounded-md border border-[color:var(--rule)] bg-cream-deep/30 p-3 font-sans text-xs text-ink-soft">
+              <p className="font-medium text-ink-soft mb-1">
+                Complete these to pay:
+              </p>
+              <ul className="list-disc ml-4 space-y-0.5">
+                {missingFields.map((f) => (
+                  <li key={f}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {submitError && (
             <p className="mt-3 font-sans text-sm text-coral">{submitError}</p>
           )}
