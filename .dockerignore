@@ -18,6 +18,12 @@ README.md
 
 # Runtime artefacts
 node_modules/
+.next/
 *.log
 .env
 .env.*
+data/
+tests/
+coverage/
+playwright-report/
+test-results/

@@ -1,0 +1,43 @@
+# Phase 2a docker-compose — LOCAL BUILD + PRE-DEPLOY DRY-RUN ONLY.
+# Do NOT `docker compose up` this against production credentials without
+# explicit approval from Vinay (see docs/superpowers/plans/... Task 44).
+#
+# Traefik labels mirror the Phase 1 pattern on sfdcdevelopers-vps; the
+# external networks (`traefik_public`, `tech-blog-automation_default`) match
+# what that VPS already exposes. On any other host you'll need to adjust.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.store
+    image: orderlink-store:local
+    container_name: orderlink-store
+    restart: always
+    env_file: .env
+    # Persist invoice PDFs written to data/invoices/ as a local fallback cache
+    # (authoritative copies live in Salesforce Files; see T28).
+    volumes:
+      - ./data/invoices:/app/data/invoices
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik_public
+      - traefik.http.routers.orderlink-store.rule=Host(`orderlink.in`)
+      - traefik.http.routers.orderlink-store.entrypoints=websecure
+      - traefik.http.routers.orderlink-store.tls=true
+      - traefik.http.routers.orderlink-store.tls.certresolver=mytlschallenge
+      - traefik.http.services.orderlink-store.loadbalancer.server.port=3000
+      - traefik.http.middlewares.orderlink-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.orderlink-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.orderlink-headers.headers.stsPreload=true
+      - traefik.http.routers.orderlink-store.middlewares=orderlink-headers
+    networks:
+      - traefik_public
+      - postgres
+
+networks:
+  traefik_public:
+    external: true
+  postgres:
+    external: true
+    name: tech-blog-automation_default
