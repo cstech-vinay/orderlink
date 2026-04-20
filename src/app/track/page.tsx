@@ -118,7 +118,9 @@ function TrackInner() {
         }}
       >
         <label className="block">
-          <span className="font-sans text-sm text-ink-soft">Order number</span>
+          <span className="font-sans text-sm text-ink-soft">
+            Order or invoice number
+          </span>
           <input
             type="text"
             value={orderNumber}
@@ -128,6 +130,11 @@ function TrackInner() {
             autoComplete="off"
             spellCheck={false}
           />
+          <span className="mt-1 block font-sans text-xs text-ink-soft/70">
+            Order # looks like <code className="font-mono">OL-2026-0001</code>.
+            Invoice # looks like <code className="font-mono">OL-INV-2026-000001</code>.
+            Either works.
+          </span>
         </label>
         <label className="block">
           <span className="font-sans text-sm text-ink-soft">

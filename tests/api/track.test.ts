@@ -105,6 +105,25 @@ describe.skipIf(!hasDb)("POST /api/track", () => {
     expect(res.status).toBe(400);
   });
 
+  it("looks up by invoice number too (OL-INV-YYYY-NNNNNN)", async () => {
+    const res = await POST(
+      buildRequest({ orderNumber: "OL-INV-2026-000099", trackKey: "3210" })
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.order.orderNumber).toBe("OL-2026-0099");
+  });
+
+  it("tolerates the common typo: invoice digits with INV dropped", async () => {
+    // User sees OL-INV-2026-000099 on thanks page, types OL-2026-000099 by mistake
+    const res = await POST(
+      buildRequest({ orderNumber: "OL-2026-000099", trackKey: "3210" })
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.order.orderNumber).toBe("OL-2026-0099");
+  });
+
   it("rate-limits the 6th call from same IP within the window", async () => {
     const ip = "198.51.100.99"; // unique IP so we don't share state with other tests
     const body = { orderNumber: "OL-2026-0099", trackKey: "3210" };
