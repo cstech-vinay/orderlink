@@ -60,8 +60,8 @@ export default function PrivacyPage() {
           <a href="https://trust.salesforce.com" target="_blank" rel="noopener">
             trust.salesforce.com
           </a>
-          ) &mdash; stores your customer profile, order history, and communication preferences.
-          ISO 27001, SOC 2 Type II, GDPR-certified.
+          ) &mdash; stores your customer profile, order history, invoice PDFs, and sends your
+          order confirmation + invoice emails. ISO 27001, SOC 2 Type II, GDPR-certified.
         </li>
         <li>
           <strong>Razorpay</strong> &mdash; processes payments; RBI-regulated payment aggregator.
@@ -71,9 +71,6 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>MSG91</strong> &mdash; OTP delivery for mobile verification.
-        </li>
-        <li>
-          <strong>Resend</strong> &mdash; transactional email delivery.
         </li>
         <li>
           <strong>Sentry</strong> &mdash; error monitoring; PII is scrubbed before events leave
