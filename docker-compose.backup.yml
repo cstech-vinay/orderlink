@@ -1,0 +1,28 @@
+# OrderLink backup sidecar compose. Kept separate from docker-compose.store.yml
+# so ops can bring backups up / down independently.
+#
+# Before `docker compose -f docker-compose.backup.yml up -d` you MUST:
+#  1. Create R2 bucket `orderlink-backups` + API token (see docs/backup-runbook.md)
+#  2. Generate GPG keypair on your workstation; export the public key and import
+#     it into the running container (see runbook step 4)
+#  3. Create a healthchecks.io check; paste ping URL into .env as HC_PING_URL
+#  4. Ensure DATABASE_URL in .env points at the live store Postgres
+
+services:
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    image: orderlink-backup:local
+    container_name: orderlink-backup
+    restart: always
+    env_file: .env
+    volumes:
+      - ./ops/gpg-pub.key:/tmp/backup-pub.key:ro
+    networks:
+      - postgres
+
+networks:
+  postgres:
+    external: true
+    name: tech-blog-automation_default

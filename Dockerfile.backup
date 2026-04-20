@@ -1,0 +1,9 @@
+# OrderLink backup sidecar. Runs a single cron entry at 02:30 IST daily.
+# Pairs with docker-compose.backup.yml on the sfdcdevelopers-vps. Not deployed
+# automatically — user triggers when ready (see DEPLOYMENT_CHECKLIST.md).
+FROM alpine:3.20
+RUN apk add --no-cache postgresql16-client gnupg rclone dcron wget bash tzdata
+COPY scripts/backup.sh /usr/local/bin/backup.sh
+RUN chmod +x /usr/local/bin/backup.sh \
+ && echo "30 2 * * * root /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+CMD ["crond", "-f", "-l", "2"]
