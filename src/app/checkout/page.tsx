@@ -7,6 +7,7 @@ import { PincodeField } from "@/components/PincodeField";
 import { PaymentSelector } from "@/components/PaymentSelector";
 import { OrderSummary } from "@/components/OrderSummary";
 import { SalesforceTrustStrip } from "@/components/SalesforceTrustStrip";
+import { MobileVerifier } from "@/components/MobileVerifier";
 
 export default function CheckoutPage() {
   return (
@@ -50,6 +51,7 @@ function CheckoutInner() {
     couponCode: "",
   });
   const [pincodeServiceable, setPincodeServiceable] = useState<boolean | null>(null);
+  const [mobileVerified, setMobileVerified] = useState(false);
 
   const amounts = useMemo(() => {
     if (!product) return null;
@@ -77,6 +79,7 @@ function CheckoutInner() {
 
   const canSubmit =
     pincodeServiceable === true &&
+    mobileVerified &&
     form.fullName.trim().length >= 2 &&
     /^[6-9]\d{9}$/.test(form.mobile) &&
     /.+@.+\..+/.test(form.email) &&
@@ -101,16 +104,11 @@ function CheckoutInner() {
               value={form.fullName}
               onChange={(v) => setForm({ ...form, fullName: v })}
             />
-            <Input
-              label="Mobile (10-digit)"
-              required
+            <MobileVerifier
               value={form.mobile}
-              onChange={(v) =>
-                setForm({ ...form, mobile: v.replace(/\D/g, "").slice(0, 10) })
-              }
-              help="We share this with Meesho for delivery SMS."
-              inputMode="numeric"
-              maxLength={10}
+              onChange={(v) => setForm((f) => ({ ...f, mobile: v }))}
+              verified={mobileVerified}
+              onVerified={setMobileVerified}
             />
             <Input
               label="Email"
