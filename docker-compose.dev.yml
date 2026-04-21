@@ -78,6 +78,39 @@ services:
       # local cache fallback when Salesforce Files is temporarily unreachable.
       - ./data/invoices:/app/data/invoices
 
+  # Background worker: drains pending_sf_sync rows to Salesforce on a 30s poll.
+  # Shares the app image (Dockerfile.dev) so it has tsx + all deps on hand.
+  # Reuses orderlink_node_modules volume so we don't run npm ci twice.
+  #
+  # Auto-exits cleanly (exit 0) when SF_SYNC_ENABLED=false → compose's
+  # restart policy does NOT retry on clean exits, so the container just
+  # stays stopped until user flips the flag + `docker compose up -d`.
+  #
+  # Private key is bind-mounted read-only; everything else shares the
+  # .env file with the app service.
+  sf-sync-worker:
+    image: orderlink-app:dev
+    container_name: orderlink-sf-sync-worker
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://orderlink_user:devpw@db:5432/orderlink
+      # Poll every 30s — can override at runtime with SF_WORKER_INTERVAL_MS.
+    volumes:
+      - .:/app
+      - orderlink_node_modules:/app/node_modules
+      # Local invoice cache — worker reads the PDF from disk for fresh orders
+      # (before SF upload), and writes the sf:… pointer back after upload.
+      - ./data/invoices:/app/data/invoices
+      # Private key mounted read-only for the JWT exchange.
+      - ./certs/sf-jwt.key:/app/certs/sf-jwt.key:ro
+    command: ["npx", "tsx", "scripts/run-sf-sync-worker.ts"]
+
 volumes:
   orderlink_pg_data:
   orderlink_node_modules:
