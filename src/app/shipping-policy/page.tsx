@@ -1,6 +1,11 @@
 import { PolicyPage } from "@/components/PolicyPage";
 
-export const metadata = { title: "Shipping Policy — OrderLink" };
+export const metadata = {
+  title: "Shipping Policy",
+  description:
+    "Free shipping across India. 3–8 day delivery to 19,000+ pincodes. COD and prepaid available. Details of how we ship.",
+  alternates: { canonical: "/shipping-policy" },
+};
 
 export default function ShippingPolicyPage() {
   return (

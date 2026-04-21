@@ -65,12 +65,8 @@ describe("products catalog", () => {
     }
   });
 
-  it("live product has starting inventory and Meesho rating data", () => {
+  it("live product has starting inventory", () => {
     const live = products.find((p) => p.status === "live")!;
     expect(live.startingInventory).toBeGreaterThan(0);
-    expect(live.meeshoRating).toBeGreaterThanOrEqual(3.5);
-    expect(live.meeshoReviewCount).toBeGreaterThan(1000);
-    expect(live.meeshoRatingDistribution).toBeDefined();
-    expect(live.meeshoRatingDistribution!.length).toBe(5);
   });
 });

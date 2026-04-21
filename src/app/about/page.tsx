@@ -1,13 +1,32 @@
+import type { Metadata } from "next";
 import { LEGAL } from "@/lib/legal";
 import { products } from "@/data/products";
 
-export const metadata = { title: "About — OrderLink" };
+export const metadata: Metadata = {
+  title: "About OrderLink — Pune-based curated lifestyle store",
+  description:
+    "Founded in 2025 in Pune. A tight edit of home, kitchen, beauty, and everyday pieces — tested, packed, and shipped across India.",
+  alternates: { canonical: "/about" },
+};
+
+const aboutJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "AboutPage",
+  url: "https://orderlink.in/about",
+  name: "About OrderLink",
+  inLanguage: "en-IN",
+  mainEntity: { "@id": "https://orderlink.in/#organization" },
+};
 
 export default function AboutPage() {
   const categories = new Set(products.map((p) => p.category)).size;
 
   return (
     <main className="max-w-3xl mx-auto px-6 py-16">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(aboutJsonLd) }}
+      />
       <p className="font-mono text-xs uppercase tracking-widest text-ink-soft">Our story</p>
       <h1 className="font-display text-5xl text-ink mt-3">Curated, not cluttered.</h1>
       <p className="mt-6 font-sans text-lg text-ink leading-relaxed">

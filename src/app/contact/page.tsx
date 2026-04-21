@@ -1,12 +1,41 @@
+import type { Metadata } from "next";
 import { PolicyPage } from "@/components/PolicyPage";
 import { LEGAL } from "@/lib/legal";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
 
-export const metadata = { title: "Contact — OrderLink" };
+export const metadata: Metadata = {
+  title: "Contact OrderLink — WhatsApp, email, grievance officer",
+  description:
+    "Support via WhatsApp, email, or phone. CodeSierra Tech Private Limited, Pune. Response within 2 hours on business days.",
+  alternates: { canonical: "/contact" },
+};
+
+const contactJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "ContactPage",
+  url: "https://orderlink.in/contact",
+  name: "Contact OrderLink",
+  inLanguage: "en-IN",
+  mainEntity: {
+    "@type": "Organization",
+    "@id": "https://orderlink.in/#organization",
+    contactPoint: {
+      "@type": "ContactPoint",
+      contactType: "customer service",
+      email: LEGAL.supportEmail,
+      telephone: LEGAL.supportPhone,
+      areaServed: "IN",
+    },
+  },
+};
 
 export default function ContactPage() {
   return (
     <PolicyPage title="Contact us" updated="20 April 2026">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(contactJsonLd) }}
+      />
       <h2>Reach us</h2>
       <ul>
         <li>

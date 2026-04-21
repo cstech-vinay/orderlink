@@ -1,7 +1,12 @@
 import { PolicyPage } from "@/components/PolicyPage";
 import { LEGAL } from "@/lib/legal";
 
-export const metadata = { title: "Terms of Service — OrderLink" };
+export const metadata = {
+  title: "Terms of Service",
+  description:
+    "OrderLink terms of service: pricing, orders, shipping, returns, liability, and governing law for India.",
+  alternates: { canonical: "/terms" },
+};
 
 export default function TermsPage() {
   return (

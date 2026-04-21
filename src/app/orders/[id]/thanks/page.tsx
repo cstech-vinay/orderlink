@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
@@ -7,6 +8,11 @@ import { getProductBySlug } from "@/data/products";
 import { LEGAL } from "@/lib/legal";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Your order",
+  robots: { index: false, follow: false, nocache: true },
+};
 
 export default async function ThanksPage({
   params,

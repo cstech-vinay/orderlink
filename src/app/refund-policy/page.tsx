@@ -1,7 +1,12 @@
 import { PolicyPage } from "@/components/PolicyPage";
 import { LEGAL } from "@/lib/legal";
 
-export const metadata = { title: "Refund & Return Policy — OrderLink" };
+export const metadata = {
+  title: "Refund & Return Policy",
+  description:
+    "7-day return window on the item. Shipping non-refundable. How OrderLink handles refunds, returns, and exchanges.",
+  alternates: { canonical: "/refund-policy" },
+};
 
 export default function RefundPolicyPage() {
   return (

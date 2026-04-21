@@ -60,10 +60,16 @@ export type Product = {
     body: string;
   }[];
 
-  meeshoRating?: number;
-  meeshoReviewCount?: number;
-  meeshoRatingDistribution?: { stars: 1 | 2 | 3 | 4 | 5; percent: number }[];
-  meeshoSourceUrl?: string;
+  // 40-word direct-answer summary, keyword-first. Renders as a bold-italic
+  // lead above the Description H2 + becomes the first sentence of Product
+  // schema description. Ideal opening pattern for AI citation.
+  tldr?: string;
+
+  // PDP FAQ block (5 Q&A recommended). Each answer 40–60 words, self-contained.
+  // Renders below Specs + gets emitted as FAQPage JSON-LD — AI assistants
+  // (ChatGPT, Perplexity, Bing Copilot) ingest this even though Google
+  // deprecated the commercial rich result in Aug 2023.
+  faqs?: { question: string; answer: string }[];
 };
 
 /** 5% off item, rounded to nearest rupee (customer-favourable rounding). */
@@ -145,16 +151,6 @@ export const products: Product[] = [
       { step: 2, title: "Lift the duck brush", body: "The silicone brush is always coated — no dipping, no second tool." },
       { step: 3, title: "Brush & cook", body: "Even coat on roti, paratha, skewers, pans — no drips, no dirty brush holder." },
     ],
-    meeshoRating: 4.0,
-    meeshoReviewCount: 42170,
-    meeshoRatingDistribution: [
-      { stars: 5, percent: 58 },
-      { stars: 4, percent: 22 },
-      { stars: 3, percent: 12 },
-      { stars: 2, percent: 5 },
-      { stars: 1, percent: 3 },
-    ],
-    meeshoSourceUrl: "https://www.meesho.com/oil-dispenser/p/87dspv",
   },
   {
     slug: "manual-choppers",
@@ -173,9 +169,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.2,
-    meeshoReviewCount: 121743,
-    meeshoSourceUrl: "https://www.meesho.com/useful-manual-choppers/p/3pf347",
   },
   {
     slug: "graters-slicers",
@@ -194,9 +187,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 173480,
-    meeshoSourceUrl: "https://www.meesho.com/modern-graters-slicers/p/4gq32x",
   },
   {
     slug: "chopping-board",
@@ -215,9 +205,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 94481,
-    meeshoSourceUrl: "https://www.meesho.com/trendy-chopping-board/p/6etjgn",
   },
   {
     slug: "ice-cube-moulds",
@@ -236,9 +223,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.2,
-    meeshoReviewCount: 18935,
-    meeshoSourceUrl: "https://www.meesho.com/ice-cube-moulds/p/6tdk8i",
   },
 
   // === BEAUTY & PERSONAL CARE ===
@@ -259,9 +243,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.3,
-    meeshoReviewCount: 172926,
-    meeshoSourceUrl: "https://www.meesho.com/ghar-soaps-magic-soap/p/5fm55a",
   },
   {
     slug: "rice-face-wash",
@@ -280,9 +261,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.3,
-    meeshoReviewCount: 130788,
-    meeshoSourceUrl: "https://www.meesho.com/mamaearth-rice-face-wash/p/88muvd",
   },
   {
     slug: "keratin-hair-mask",
@@ -301,9 +279,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 121027,
-    meeshoSourceUrl: "https://www.meesho.com/advanced-nourishing-hair/p/7bd5rn",
   },
   {
     slug: "body-cream",
@@ -322,9 +297,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 22089,
-    meeshoSourceUrl: "https://www.meesho.com/everyday-body-creams/p/5uk4r7",
   },
   {
     slug: "sunscreen-spf50",
@@ -343,9 +315,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.2,
-    meeshoReviewCount: 17555,
-    meeshoSourceUrl: "https://www.meesho.com/sunscreen/p/7ygc2g",
   },
 
   // === CONSUMER ELECTRONICS ===
@@ -366,9 +335,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 53148,
-    meeshoSourceUrl: "https://www.meesho.com/mobile-holders/p/5c3yc9",
   },
   {
     slug: "mobile-charger",
@@ -387,9 +353,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 34517,
-    meeshoSourceUrl: "https://www.meesho.com/mobile-chargers/p/7f7ded",
   },
   {
     slug: "selfie-stick",
@@ -408,9 +371,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 13459,
-    meeshoSourceUrl: "https://www.meesho.com/fancy-selfie-stick/p/6w4mcw",
   },
   {
     slug: "key-holder",
@@ -429,9 +389,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.2,
-    meeshoReviewCount: 9695,
-    meeshoSourceUrl: "https://www.meesho.com/fancy-key-holders/p/6x6bgw",
   },
   {
     slug: "portronics-cable",
@@ -450,9 +407,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 8375,
-    meeshoSourceUrl: "https://www.meesho.com/portronics-konnect/p/5ioq8l",
   },
 
   // === FASHION — WOMEN KURTIS ===
@@ -473,9 +427,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 80775,
-    meeshoSourceUrl: "https://www.meesho.com/women-rayon-myra-petite-kurtis/p/6hnqz1",
   },
   {
     slug: "net-charvi-kurti",
@@ -494,9 +445,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 38198,
-    meeshoSourceUrl: "https://www.meesho.com/women-net-charvi-superior-kurtis/p/65eqip",
   },
   {
     slug: "rayon-banita-kurti",
@@ -515,9 +463,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 16188,
-    meeshoSourceUrl: "https://www.meesho.com/women-rayon-banita-kurtis/p/6dy8dt",
   },
   {
     slug: "myra-drishya-kurti",
@@ -536,9 +481,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.2,
-    meeshoReviewCount: 9939,
-    meeshoSourceUrl: "https://www.meesho.com/myra-drishya-kurtis/p/63xwk2",
   },
   {
     slug: "aagyeyi-kurti",
@@ -557,9 +499,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 6709,
-    meeshoSourceUrl: "https://www.meesho.com/aagyeyi-fabulous-kurtis/p/255r2b",
   },
 
   // === WOMEN FOOTWEAR ===
@@ -580,9 +519,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.1,
-    meeshoReviewCount: 31155,
-    meeshoSourceUrl: "https://www.meesho.com/relaxed-fabulous-women-slippers/p/74yq3z",
   },
   {
     slug: "fashion-slippers-1",
@@ -601,9 +537,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 17580,
-    meeshoSourceUrl: "https://www.meesho.com/unique-fashionable-women-slippers/p/77ye3p",
   },
   {
     slug: "fashion-slippers-2",
@@ -622,9 +555,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 11644,
-    meeshoSourceUrl: "https://www.meesho.com/latest-fashionable-women-slippers/p/5ue1lm",
   },
   {
     slug: "birde-casual-shoes",
@@ -643,9 +573,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 9007,
-    meeshoSourceUrl: "https://www.meesho.com/birde-casual-shoes/p/5fgn0b",
   },
   {
     slug: "attractive-slippers",
@@ -664,9 +591,6 @@ export const products: Product[] = [
     description: "",
     specs: [],
     startingInventory: 0,
-    meeshoRating: 4.0,
-    meeshoReviewCount: 5059,
-    meeshoSourceUrl: "https://www.meesho.com/unique-attractive-women-slippers/p/7cmwwt",
   },
 ];
 

@@ -3,6 +3,7 @@ import Image from "next/image";
 import type { Product } from "@/data/products";
 import { SHIPPING_PAISE } from "@/data/products";
 import { getHeadlinePricePaise, getDisplayDiscountPercent } from "@/lib/pricing";
+import { getAverageRating, getReviewCount } from "@/data/reviews";
 import { ComingSoonBadge } from "./ComingSoonBadge";
 
 function rupees(paise: number): string {
@@ -14,6 +15,8 @@ export function ProductCard({ product }: { product: Product }) {
   const hasImage = product.images.length > 0;
   const headlinePricePaise = getHeadlinePricePaise(product);
   const discountPercent = getDisplayDiscountPercent(product);
+  const reviewCount = getReviewCount(product.slug);
+  const avgRating = reviewCount > 0 ? getAverageRating(product.slug) : 0;
 
   const cardContent = (
     <>
@@ -64,10 +67,11 @@ export function ProductCard({ product }: { product: Product }) {
                   ? "Shipping included \u00b7 all-India"
                   : <>+ {rupees(SHIPPING_PAISE)} shipping &middot; non-refundable</>}
               </p>
-              {product.meeshoReviewCount && (
+              {reviewCount > 0 && (
                 <p className="font-mono text-[0.7rem] text-ink-soft/80 mt-1">
-                  &#9733; {product.meeshoRating?.toFixed(1)} &middot;{" "}
-                  {product.meeshoReviewCount.toLocaleString("en-IN")} loved it
+                  &#9733; {avgRating.toFixed(1)} &middot;{" "}
+                  {reviewCount.toLocaleString("en-IN")} verified buyer
+                  {reviewCount === 1 ? "" : "s"}
                 </p>
               )}
               <span className="mt-3 block w-full rounded-md bg-coral text-cream font-sans text-sm font-medium py-2.5 text-center group-hover:opacity-90 transition">

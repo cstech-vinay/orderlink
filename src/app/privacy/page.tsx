@@ -1,7 +1,12 @@
 import { PolicyPage } from "@/components/PolicyPage";
 import { LEGAL } from "@/lib/legal";
 
-export const metadata = { title: "Privacy Policy — OrderLink" };
+export const metadata = {
+  title: "Privacy Policy",
+  description:
+    "How OrderLink collects, uses, and protects your personal information. Disclosures required by Indian data-protection law.",
+  alternates: { canonical: "/privacy" },
+};
 
 export default function PrivacyPage() {
   return (
