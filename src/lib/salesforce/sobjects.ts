@@ -134,8 +134,12 @@ export async function upsertOrder(input: OrderInput): Promise<OrderUpsertResult>
     AccountId: input.accountId,
     RecordTypeId: config.recordTypeIds.order,
     EffectiveDate: new Date().toISOString().slice(0, 10),
-    Status: "Activated", // SF standard Status; our lifecycle is on OrderLink_Status__c
-    OrderLink_Order_Number__c: input.orderNumber,
+    // SF's standard Status picklist is immutable once Activated. We don't use it
+    // for lifecycle (OrderLink_Status__c does that). Always stay Draft so the
+    // record remains editable for admin backsyncs and retries.
+    Status: "Draft",
+    // NOTE: OrderLink_Order_Number__c is intentionally omitted — SF rejects
+    // an upsert body that repeats the External Id it's keyed on in the URL.
     OrderLink_Invoice_Number__c: input.invoiceNumber,
     OrderLink_Status__c: input.statusSlug,
     OrderLink_Payment_Method__c: input.paymentMethod,
