@@ -180,7 +180,6 @@ External accounts and keys — many of these have 2-7 day lead times, start earl
 
 - Multi-SKU cart (currently single-product checkout)
 - Order status webhook from Meesho → auto-update SF Order → trigger "Shipped" email Flow
-- `/admin/orders` search + filter + CSV export
 - International payment rails (Stripe Global / PayPal) for Indian diaspora
 - Wishlist + personalization
 - Subscription SKUs
