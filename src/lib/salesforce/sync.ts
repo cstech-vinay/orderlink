@@ -119,6 +119,20 @@ async function syncFullOrder(
     return { ok: false, jobKind: "full_sync", error: "order_ref_missing", retryable: false };
   }
 
+  // Gate: never sync an order that hasn't been paid yet. The verify-inline
+  // path (T29) handles paid ones; the reaper flips abandoned unpaid rows from
+  // full_sync → lead_sync once they go stale. Without this gate, the worker
+  // would race the user's payment and create an Activated SF Order for an
+  // order that never got paid.
+  if (order.status === "pending_payment" || order.status === "pending_advance") {
+    return {
+      ok: false,
+      jobKind: "full_sync",
+      error: `order_not_yet_paid:${order.status}`,
+      retryable: true,
+    };
+  }
+
   const product = getProductBySlug(order.productSlug);
   if (!product) {
     return { ok: false, jobKind: "full_sync", error: "product_missing", retryable: false };

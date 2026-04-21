@@ -129,6 +129,35 @@ services:
         - action: restart
           path: ./.env
 
+  # Reaper: releases inventory held by abandoned checkouts AND promotes their
+  # pending_sf_sync rows from full_sync → lead_sync so the sf-sync-worker creates
+  # Salesforce Leads (not Accounts+Orders) for retargeting. Runs every 5 min.
+  # Without this sidecar the promotion only happens when someone manually runs
+  # the script — meaning abandoned-cart Leads never actually land in SF.
+  reaper:
+    image: orderlink-app:dev
+    container_name: orderlink-reaper
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://orderlink_user:devpw@db:5432/orderlink
+      LOOP: "1"
+      REAPER_INTERVAL_MS: "300000"
+      REAPER_STALE_MINUTES: "15"
+    volumes:
+      - .:/app
+      - orderlink_node_modules:/app/node_modules
+    command: ["npx", "tsx", "scripts/reap-reservations.ts"]
+    develop:
+      watch:
+        - action: restart
+          path: ./.env
+
   # Pulls SF's OrderLink_Coupon__c catalog into the PG `coupons` cache every
   # 10 minutes. Keeps /api/coupons/validate on the hot checkout path (<50ms)
   # while letting marketing own coupon CRUD in the SF UI.
