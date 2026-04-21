@@ -111,6 +111,29 @@ services:
       - ./certs/sf-jwt.key:/app/certs/sf-jwt.key:ro
     command: ["npx", "tsx", "scripts/run-sf-sync-worker.ts"]
 
+  # Pulls SF's OrderLink_Coupon__c catalog into the PG `coupons` cache every
+  # 10 minutes. Keeps /api/coupons/validate on the hot checkout path (<50ms)
+  # while letting marketing own coupon CRUD in the SF UI.
+  coupon-cache-refresher:
+    image: orderlink-app:dev
+    container_name: orderlink-coupon-cache
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://orderlink_user:devpw@db:5432/orderlink
+      LOOP: "1"
+      COUPON_CACHE_INTERVAL_MS: "600000"
+    volumes:
+      - .:/app
+      - orderlink_node_modules:/app/node_modules
+      - ./certs/sf-jwt.key:/app/certs/sf-jwt.key:ro
+    command: ["npx", "tsx", "scripts/refresh-coupon-cache.ts"]
+
 volumes:
   orderlink_pg_data:
   orderlink_node_modules:

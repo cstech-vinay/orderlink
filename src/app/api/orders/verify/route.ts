@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { verifyPaymentSignature } from "@/lib/razorpay";
 import { commitInventory, releaseInventory } from "@/lib/inventory";
@@ -95,9 +95,20 @@ export async function POST(request: Request) {
     console.error("[verify] coupon redemption record failed:", err);
   }
 
-  // Salesforce sync is already enqueued in pending_sf_sync (from POST /api/orders).
-  // The SF worker (T30) will: upsert Person Account + Order, upload the PDF
-  // as ContentVersion, and trigger the SF Flow that emails the customer.
+  // T29: best-effort synchronous SF sync so the customer's order-confirmation
+  // email (fired by SF Flow on Order.Status → paid) lands within a few seconds
+  // instead of waiting for the next sf-sync-worker poll cycle (up to 30s).
+  //
+  // Fire-and-forget pattern — the pending_sf_sync row already exists (enqueued
+  // by POST /api/orders) and the worker will drain it regardless. This attempt
+  // just races the worker and usually wins. If it fails (SF down, JWT issue),
+  // the worker retries with backoff — customer still gets the email, just later.
+  try {
+    await attemptInlineSfSync(order.id);
+  } catch (err) {
+    // Intentionally swallow — worker handles retries. Log for observability.
+    console.warn("[verify] inline SF sync skipped/failed:", err);
+  }
 
   return NextResponse.json({
     ok: true,
@@ -105,6 +116,44 @@ export async function POST(request: Request) {
     status: newStatus,
     orderNumber: order.orderNumber,
   });
+}
+
+async function attemptInlineSfSync(orderRefId: string): Promise<void> {
+  const { isSalesforceEnabled } = await import("@/lib/salesforce/config");
+  if (!isSalesforceEnabled()) return; // flag off → worker handles it
+
+  const { syncPendingRow } = await import("@/lib/salesforce/sync");
+
+  // Find the pending full_sync row for this order
+  const [pending] = await db
+    .select()
+    .from(schema.pendingSfSync)
+    .where(
+      and(
+        eq(schema.pendingSfSync.orderRefId, orderRefId),
+        eq(schema.pendingSfSync.jobKind, "full_sync"),
+        eq(schema.pendingSfSync.status, "pending")
+      )
+    )
+    .limit(1);
+
+  if (!pending) return; // already synced by worker, or non-pending
+
+  const outcome = await syncPendingRow(pending);
+  if (outcome.ok) {
+    await db
+      .update(schema.pendingSfSync)
+      .set({
+        status: "synced",
+        sfAccountId: outcome.sfAccountId ?? null,
+        sfOrderId: outcome.sfOrderId ?? null,
+      })
+      .where(eq(schema.pendingSfSync.id, pending.id));
+    console.log(`[verify] inline SF sync ✓ for ${orderRefId}`);
+  } else {
+    // Leave row as 'pending' — worker will retry
+    console.warn(`[verify] inline SF sync failed (${outcome.error}); worker will retry`);
+  }
 }
 
 async function generateAndStoreInvoice(
