@@ -28,6 +28,11 @@ test-results/
 # === Generated invoices (local runs) ===
 data/invoices/
 
+# === Secrets (service accounts, signing keys, certs — NEVER commit) ===
+secrets/
+*.serviceaccount.json
+sf-jwt.pem
+
 # === Image-gen pipeline: raw Gemini PNG outputs (keep only optimized .webp in git) ===
 public/assets/products/*/generated/
 assets/products/*/generated/

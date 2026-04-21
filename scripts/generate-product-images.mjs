@@ -3,15 +3,21 @@
  * OrderLink product-image generator.
  *
  * Reads reference images from assets/products/<slug>/ and generates the full
- * content bundle (1 thumbnail + 6 PDP + 3 feed + 3 story) for a product,
- * using ONE Gemini chat session per product so visual context carries
- * across the set. Outputs optimized WebPs to public/assets/products/<slug>/.
+ * content bundle (1 thumbnail + 6 PDP + 3 feed + 3 story + N scenarios) for
+ * a product, using ONE Vertex AI chat session per product so visual context
+ * carries across the set. Outputs optimized WebPs to
+ * public/assets/products/<slug>/.
  *
  * Usage:
  *   node scripts/generate-product-images.mjs <slug>
  *   npm run generate:images -- <slug>
  *
- * Requires: .env.local with GEMINI_API_KEY and GEMINI_IMAGE_MODEL.
+ * Requires in .env.local:
+ *   - GOOGLE_APPLICATION_CREDENTIALS: path to service-account JSON (relative
+ *     paths are resolved against the repo root)
+ *   - GCP_PROJECT_ID: the GCP project the service account belongs to
+ *   - GCP_LOCATION: Vertex region (e.g. us-central1)
+ *   - VERTEX_IMAGE_MODEL: image-gen model id (e.g. gemini-3.1-flash-image-preview)
  */
 
 import { GoogleGenAI } from "@google/genai";
@@ -137,12 +143,38 @@ async function main() {
   log.step(`generating images for slug: ${slug}`);
 
   await loadEnvLocal();
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image-preview";
-  if (!apiKey || apiKey === "CHANGE_ME") {
-    log.err("GEMINI_API_KEY missing in .env.local");
+
+  // Vertex AI auth: resolve service-account path to absolute so google-auth
+  // picks it up regardless of where the script was invoked from, then hand the
+  // project + location to the SDK.
+  const credsRel = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const project = process.env.GCP_PROJECT_ID;
+  const location = process.env.GCP_LOCATION || "us-central1";
+  const model =
+    process.env.VERTEX_IMAGE_MODEL || "gemini-2.5-flash-image-preview";
+
+  if (!credsRel || credsRel === "CHANGE_ME") {
+    log.err("GOOGLE_APPLICATION_CREDENTIALS missing in .env.local");
     process.exit(1);
   }
+  if (!project || project === "CHANGE_ME") {
+    log.err("GCP_PROJECT_ID missing in .env.local");
+    process.exit(1);
+  }
+
+  const credsAbs = path.isAbsolute(credsRel)
+    ? credsRel
+    : path.resolve(REPO_ROOT, credsRel);
+  try {
+    await fs.access(credsAbs);
+  } catch {
+    log.err(`service-account JSON not found at ${credsAbs}`);
+    process.exit(1);
+  }
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = credsAbs;
+
+  log.info("vertex project:", project);
+  log.info("vertex location:", location);
   log.info("model:", model);
 
   // Load per-product prompts
@@ -163,8 +195,12 @@ async function main() {
   // Prep references
   const refImages = await loadReferenceImages();
 
-  // Open chat session
-  const ai = new GoogleGenAI({ apiKey });
+  // Open chat session — Vertex AI mode authenticates via GOOGLE_APPLICATION_CREDENTIALS
+  const ai = new GoogleGenAI({
+    vertexai: true,
+    project,
+    location,
+  });
   const chat = ai.chats.create({
     model,
     config: {
@@ -186,7 +222,11 @@ async function main() {
     log.err("failed to prime chat:", err.message);
     if (err.status === 404 || /not found/i.test(err.message)) {
       log.warn(
-        `model "${model}" not found — set GEMINI_IMAGE_MODEL in .env.local to a valid image-gen model (e.g. gemini-2.5-flash-image-preview)`
+        `model "${model}" not found in project "${project}" @ ${location} — set VERTEX_IMAGE_MODEL in .env.local to a valid Vertex image-gen model (e.g. gemini-2.5-flash-image-preview) or try a different location`
+      );
+    } else if (err.status === 403 || /permission|denied|unauthenti/i.test(err.message)) {
+      log.warn(
+        `auth failed — check the service account has the "Vertex AI User" role on project ${project}`
       );
     }
     process.exit(1);
