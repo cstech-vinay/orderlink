@@ -41,27 +41,42 @@ export async function GET(
 
   const path = order.invoicePdfPath;
 
-  // T28 path — SF Files is authoritative once the worker uploads. Until the
-  // SF fetcher lands, refuse politely instead of leaking a stale local copy.
-  if (path?.startsWith("sf:")) {
-    return new NextResponse("Invoice is being synced. Retry in a moment.", {
-      status: 503,
-      headers: { "Retry-After": "30" },
-    });
-  }
-
-  // Try the on-disk copy first.
   let buf: Buffer | null = null;
-  if (path) {
+
+  // Source 1 — Salesforce Files (sf:<ContentDocumentId>). Canonical for
+  // orders that have been synced. Cached in-memory for 5 minutes to avoid
+  // hammering SF on repeat downloads.
+  if (path?.startsWith("sf:")) {
+    const contentDocumentId = path.slice(3);
+    buf = cacheGet(contentDocumentId);
+    if (!buf) {
+      try {
+        const { sfDownloadLatestContentVersion } = await import(
+          "@/lib/salesforce/client"
+        );
+        const result = await sfDownloadLatestContentVersion(contentDocumentId);
+        buf = result.bytes;
+        cacheSet(contentDocumentId, buf);
+      } catch (err) {
+        console.error("[invoice.pdf] SF fetch failed:", err);
+        // Fall through to regenerate — customer shouldn't see a 503 just
+        // because SF is temporarily unreachable.
+        buf = null;
+      }
+    }
+  } else if (path) {
+    // Source 2 — local disk cache (pre-SF-sync or fallback)
     try {
       buf = await fs.readFile(path);
     } catch {
-      buf = null; // fall through to regenerate
+      buf = null;
     }
   }
 
-  // File missing (or never generated — order hit verify before T24 shipped,
-  // container restart, etc.) — regenerate on demand from the encrypted payload.
+  // Source 3 — regenerate on demand from the encrypted payload. Catches:
+  //   - File missing on disk (volume pruned, container restart)
+  //   - SF Files fetch failed above
+  //   - Order created before T24 (no PDF ever generated)
   if (!buf) {
     try {
       buf = await regenerateInvoice(order);
@@ -80,6 +95,37 @@ export async function GET(
       "Cache-Control": "private, no-store",
       "X-Robots-Tag": "noindex, nofollow",
     },
+  });
+}
+
+// Tiny in-memory cache of SF-fetched invoice bytes. Keyed by ContentDocumentId,
+// 5-minute TTL. Module-level — survives across requests within the same Node
+// process. Small footprint: ~15 KB per invoice × 200 cache slots = 3 MB worst case.
+type CacheEntry = { bytes: Buffer; expiresAt: number };
+const INVOICE_CACHE = new Map<string, CacheEntry>();
+const INVOICE_CACHE_TTL_MS = 5 * 60 * 1000;
+const INVOICE_CACHE_MAX = 200;
+
+function cacheGet(key: string): Buffer | null {
+  const entry = INVOICE_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    INVOICE_CACHE.delete(key);
+    return null;
+  }
+  return entry.bytes;
+}
+
+function cacheSet(key: string, bytes: Buffer): void {
+  if (INVOICE_CACHE.size >= INVOICE_CACHE_MAX) {
+    // Drop the oldest entry — Map preserves insertion order, so .keys().next()
+    // gives the least-recently-inserted key.
+    const firstKey = INVOICE_CACHE.keys().next().value;
+    if (firstKey) INVOICE_CACHE.delete(firstKey);
+  }
+  INVOICE_CACHE.set(key, {
+    bytes,
+    expiresAt: Date.now() + INVOICE_CACHE_TTL_MS,
   });
 }
 

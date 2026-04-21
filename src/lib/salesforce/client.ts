@@ -1,4 +1,4 @@
-import { getSalesforceConfig, type SalesforceConfig } from "./config";
+import { getSalesforceCredentials, type SalesforceConfig } from "./config";
 import { tokenCache } from "./auth";
 
 /**
@@ -49,7 +49,7 @@ type RestOptions = {
  * with content, or null for 204 No Content.
  */
 export async function sfRest<T = unknown>(opts: RestOptions): Promise<T | null> {
-  const config = getSalesforceConfig();
+  const config = getSalesforceCredentials();
   if (!config) throw new Error("salesforce_not_configured");
   return callWithRetry<T>(config, opts, false);
 }
@@ -136,7 +136,7 @@ export async function sfUploadContentVersion(args: {
   filename: string;
   bytes: Buffer;
 }): Promise<{ id: string }> {
-  const config = getSalesforceConfig();
+  const config = getSalesforceCredentials();
   if (!config) throw new Error("salesforce_not_configured");
 
   const token = await tokenCache.get(config);
@@ -202,4 +202,68 @@ export async function sfQuery<T = Record<string, unknown>>(soql: string): Promis
     query: { q: soql },
   });
   return result?.records ?? [];
+}
+
+/**
+ * Download the raw bytes of a ContentVersion's VersionData field. SF exposes
+ * a dedicated binary endpoint for this so we avoid the overhead of a
+ * base64-encoded JSON blob round-trip.
+ *
+ *   GET /sobjects/ContentVersion/{Id}/VersionData
+ *
+ * Returns the Buffer + the Content-Type header SF reports (usually
+ * "application/pdf" for our invoices).
+ */
+export async function sfDownloadVersionData(
+  contentVersionId: string
+): Promise<{ bytes: Buffer; contentType: string }> {
+  const config = getSalesforceCredentials();
+  if (!config) throw new Error("salesforce_not_configured");
+
+  const token = await tokenCache.get(config);
+  const url = `${token.instanceUrl}/services/data/${config.apiVersion}/sobjects/ContentVersion/${contentVersionId}/VersionData`;
+
+  const doFetch = async (bearer: string): Promise<Response> =>
+    fetch(url, { headers: { Authorization: `Bearer ${bearer}` } });
+
+  let res = await doFetch(token.value);
+  if (res.status === 401) {
+    tokenCache.invalidate();
+    const fresh = await tokenCache.get(config);
+    res = await doFetch(fresh.value);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new SalesforceError(
+      `SF VersionData fetch failed (${res.status}): ${text}`,
+      res.status,
+      null,
+      text
+    );
+  }
+
+  const arrayBuf = await res.arrayBuffer();
+  return {
+    bytes: Buffer.from(arrayBuf),
+    contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
+  };
+}
+
+/**
+ * Given a ContentDocumentId (069…), resolve its latest published ContentVersion
+ * and download the binary. Most-recent version is standard for invoice PDFs
+ * since we only upload once per order.
+ */
+export async function sfDownloadLatestContentVersion(
+  contentDocumentId: string
+): Promise<{ bytes: Buffer; contentType: string; versionId: string }> {
+  const rows = await sfQuery<{ Id: string }>(
+    `SELECT Id FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}' AND IsLatest = true LIMIT 1`
+  );
+  if (rows.length === 0) {
+    throw new Error(`no_content_version_for_document:${contentDocumentId}`);
+  }
+  const { bytes, contentType } = await sfDownloadVersionData(rows[0].Id);
+  return { bytes, contentType, versionId: rows[0].Id };
 }
