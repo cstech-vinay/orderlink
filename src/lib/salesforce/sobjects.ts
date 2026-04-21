@@ -130,13 +130,17 @@ export async function upsertOrder(input: OrderInput): Promise<OrderUpsertResult>
   const config = getSalesforceConfig();
   if (!config) throw new Error("salesforce_not_configured");
 
+  // SF requires every Order to reference a Pricebook2 BEFORE OrderItems can
+  // be added. Use the standard pricebook — our PricebookEntries all live there.
+  const pricebook2Id = await getStandardPricebookId();
+
   const body = {
     AccountId: input.accountId,
     RecordTypeId: config.recordTypeIds.order,
+    Pricebook2Id: pricebook2Id,
     EffectiveDate: new Date().toISOString().slice(0, 10),
-    // SF's standard Status picklist is immutable once Activated. We don't use it
-    // for lifecycle (OrderLink_Status__c does that). Always stay Draft so the
-    // record remains editable for admin backsyncs and retries.
+    // SF's standard Status picklist: we start at Draft so line items can be
+    // added. Activation happens after all sync steps succeed (see activateOrder).
     Status: "Draft",
     // NOTE: OrderLink_Order_Number__c is intentionally omitted — SF rejects
     // an upsert body that repeats the External Id it's keyed on in the URL.
@@ -176,6 +180,168 @@ export async function upsertOrder(input: OrderInput): Promise<OrderUpsertResult>
     return { id: rows[0].Id, created: false };
   }
   return { id: result.id, created: result.created };
+}
+
+// ---------- Product2 + PricebookEntry + OrderItem (for Order line items) ----------
+
+/**
+ * Cached standard Pricebook2 Id. Org-level, set once when SF provisions the
+ * org. First call fetches + memoizes; everything else reads the cache.
+ */
+let standardPricebookIdCache: string | null = null;
+
+async function getStandardPricebookId(): Promise<string> {
+  if (standardPricebookIdCache) return standardPricebookIdCache;
+  const rows = await sfQuery<{ Id: string }>(
+    "SELECT Id FROM Pricebook2 WHERE IsStandard = true AND IsActive = true LIMIT 1"
+  );
+  if (rows.length === 0) {
+    throw new Error("standard_pricebook_not_found");
+  }
+  standardPricebookIdCache = rows[0].Id;
+  return standardPricebookIdCache;
+}
+
+export type Product2UpsertInput = {
+  slug: string;
+  title: string;
+  listPriceINR: number; // rupees; the fixed list price on the PricebookEntry
+};
+
+export type Product2UpsertResult = {
+  product2Id: string;
+  pricebookEntryId: string;
+  created: boolean;
+};
+
+/**
+ * Ensures a Product2 + PricebookEntry exists for a given catalog slug. Upsert
+ * semantics by ProductCode = slug (we query first since ProductCode isn't
+ * marked External ID on Product2 by default). First order of a new SKU creates
+ * both records; subsequent orders reuse them.
+ *
+ * The PricebookEntry is what OrderItem references — standard SF linking
+ * between a product catalog and an order line.
+ */
+export async function upsertProduct2AndPricebookEntry(
+  input: Product2UpsertInput
+): Promise<Product2UpsertResult> {
+  const config = getSalesforceConfig();
+  if (!config) throw new Error("salesforce_not_configured");
+
+  const standardPricebookId = await getStandardPricebookId();
+
+  // Product2: look up by ProductCode, create if missing.
+  const existingProducts = await sfQuery<{ Id: string }>(
+    `SELECT Id FROM Product2 WHERE ProductCode = '${input.slug}' LIMIT 1`
+  );
+
+  let product2Id: string;
+  let created = false;
+  if (existingProducts.length > 0) {
+    product2Id = existingProducts[0].Id;
+  } else {
+    const body: Record<string, unknown> = {
+      Name: input.title,
+      ProductCode: input.slug,
+      IsActive: true,
+      Description: `OrderLink catalog SKU: ${input.slug}`,
+    };
+    if (config.recordTypeIds.product) {
+      body.RecordTypeId = config.recordTypeIds.product;
+    }
+    const result = await sfRest<{ id: string }>({
+      method: "POST",
+      path: "/sobjects/Product2",
+      body,
+    });
+    if (!result) throw new Error("product2_create_returned_no_id");
+    product2Id = result.id;
+    created = true;
+  }
+
+  // PricebookEntry: look up by (Product2Id, Pricebook2Id), create if missing.
+  const existingEntries = await sfQuery<{ Id: string }>(
+    `SELECT Id FROM PricebookEntry WHERE Product2Id = '${product2Id}' AND Pricebook2Id = '${standardPricebookId}' LIMIT 1`
+  );
+  let pricebookEntryId: string;
+  if (existingEntries.length > 0) {
+    pricebookEntryId = existingEntries[0].Id;
+  } else {
+    const result = await sfRest<{ id: string }>({
+      method: "POST",
+      path: "/sobjects/PricebookEntry",
+      body: {
+        Product2Id: product2Id,
+        Pricebook2Id: standardPricebookId,
+        UnitPrice: input.listPriceINR,
+        IsActive: true,
+      },
+    });
+    if (!result) throw new Error("pricebook_entry_create_returned_no_id");
+    pricebookEntryId = result.id;
+  }
+
+  return { product2Id, pricebookEntryId, created };
+}
+
+export type OrderItemInput = {
+  orderId: string;
+  pricebookEntryId: string;
+  quantity: number;
+  unitPriceINR: number; // rupees; what the customer actually paid per unit
+};
+
+/**
+ * Create an OrderItem on the given Order. SF auto-calculates Order.TotalAmount
+ * from the sum of OrderItem totals. Must be called BEFORE activating the
+ * Order — once Activated, line items become immutable.
+ */
+export async function createOrderItem(
+  input: OrderItemInput
+): Promise<{ id: string }> {
+  const result = await sfRest<{ id: string }>({
+    method: "POST",
+    path: "/sobjects/OrderItem",
+    body: {
+      OrderId: input.orderId,
+      PricebookEntryId: input.pricebookEntryId,
+      Quantity: input.quantity,
+      UnitPrice: input.unitPriceINR,
+    },
+  });
+  if (!result) throw new Error("order_item_create_returned_no_id");
+  return { id: result.id };
+}
+
+/**
+ * Flip Order.Status → Activated. Required after line items are added so SF
+ * treats the Order as final. Once activated, line items cannot be added,
+ * removed, or changed (but custom fields like OrderLink_Status__c can still
+ * be updated — that's where lifecycle lives).
+ */
+export async function activateOrder(orderId: string): Promise<void> {
+  await sfRest({
+    method: "PATCH",
+    path: `/sobjects/Order/${orderId}`,
+    body: { Status: "Activated" },
+  });
+}
+
+/** True if the Order already has at least one OrderItem — drives idempotency. */
+export async function orderHasLineItems(orderId: string): Promise<boolean> {
+  const rows = await sfQuery<{ Id: string }>(
+    `SELECT Id FROM OrderItem WHERE OrderId = '${orderId}' LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+/** Returns the current Order.Status. Used to skip activation if already done. */
+export async function getOrderStatus(orderId: string): Promise<string | null> {
+  const rows = await sfQuery<{ Status: string }>(
+    `SELECT Status FROM Order WHERE Id = '${orderId}' LIMIT 1`
+  );
+  return rows[0]?.Status ?? null;
 }
 
 /** Update only the status + timestamps (used by T31 admin back-sync). */

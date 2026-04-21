@@ -12,6 +12,11 @@ import {
   uploadInvoicePdf,
   upsertCouponRedemption,
   upsertRestockSignup,
+  upsertProduct2AndPricebookEntry,
+  createOrderItem,
+  activateOrder,
+  orderHasLineItems,
+  getOrderStatus,
   type AccountInput,
   type OrderInput,
   type LeadInput,
@@ -161,26 +166,52 @@ async function syncFullOrder(
   };
   const sfOrder = await upsertOrder(orderInput);
 
-  // 3. Upload invoice PDF — fall back to local-disk copy if it exists, regenerate otherwise
-  let pdfBytes: Buffer;
-  const localPath = order.invoicePdfPath;
-  if (localPath && !localPath.startsWith("sf:")) {
-    try {
-      pdfBytes = await readFile(localPath);
-    } catch {
-      pdfBytes = await regenerateInvoice(order, payload, product);
-    }
-  } else {
-    pdfBytes = await regenerateInvoice(order, payload, product);
-  }
+  // 3. Upsert Product2 + PricebookEntry (idempotent — reuses existing per SKU),
+  //    then attach an OrderItem so SF auto-populates Order.TotalAmount in ₹.
+  //    Skipped if the Order already has items (re-sync after activation).
+  const priceListINR = product.itemPricePaise / 100;
+  const orderTotalINR = order.totalPaise / 100;
 
-  const uploaded = await uploadInvoicePdf({
-    orderSfId: sfOrder.id,
-    invoiceNumber: order.invoiceNumber,
-    pdfBytes,
+  const { pricebookEntryId } = await upsertProduct2AndPricebookEntry({
+    slug: order.productSlug,
+    title: product.title,
+    listPriceINR: priceListINR,
   });
 
-  // 4. If coupon was used, upsert redemption
+  if (!(await orderHasLineItems(sfOrder.id))) {
+    await createOrderItem({
+      orderId: sfOrder.id,
+      pricebookEntryId,
+      quantity: 1,
+      // Use the grand total (item + shipping − discounts) so SF's standard
+      // Order.TotalAmount shows what the customer actually paid in ₹.
+      unitPriceINR: orderTotalINR,
+    });
+  }
+
+  // 4. Upload invoice PDF. Idempotency: if invoicePdfPath already has an
+  //    sf:<ContentDocumentId> pointer, the PDF is already in SF — skip the
+  //    re-upload to avoid cluttering Files with duplicates on retries.
+  const localPath = order.invoicePdfPath;
+  let contentDocumentId: string;
+  if (localPath?.startsWith("sf:")) {
+    contentDocumentId = localPath.slice(3);
+  } else {
+    const pdfBytes = localPath
+      ? await readFile(localPath).catch(() =>
+          regenerateInvoice(order, payload, product)
+        )
+      : await regenerateInvoice(order, payload, product);
+
+    const uploaded = await uploadInvoicePdf({
+      orderSfId: sfOrder.id,
+      invoiceNumber: order.invoiceNumber,
+      pdfBytes,
+    });
+    contentDocumentId = uploaded.contentDocumentId;
+  }
+
+  // 5. If coupon was used, upsert redemption
   if (payload.couponCode) {
     await upsertCouponRedemption({
       orderRefUuid: order.id,
@@ -191,7 +222,15 @@ async function syncFullOrder(
     });
   }
 
-  // 5. Stamp orders_ref with SF identifiers + switch invoicePdfPath to sf:…
+  // 6. Activate the Order — flips Status from Draft → Activated so SF treats
+  //    it as final. All upstream data (account, items, PDF, redemption) is
+  //    now in place. Idempotent: skip if already Activated.
+  const currentStatus = await getOrderStatus(sfOrder.id);
+  if (currentStatus !== "Activated") {
+    await activateOrder(sfOrder.id);
+  }
+
+  // 7. Stamp orders_ref with SF identifiers + switch invoicePdfPath to sf:…
   await db
     .update(schema.ordersRef)
     .set({
@@ -199,7 +238,7 @@ async function syncFullOrder(
       sfAccountId: account.id,
       sfOrderId: sfOrder.id,
       sfLastSyncAt: new Date(),
-      invoicePdfPath: `sf:${uploaded.contentDocumentId}`,
+      invoicePdfPath: `sf:${contentDocumentId}`,
       updatedAt: new Date(),
     })
     .where(eq(schema.ordersRef.id, order.id));
@@ -209,7 +248,7 @@ async function syncFullOrder(
     jobKind: "full_sync",
     sfAccountId: account.id,
     sfOrderId: sfOrder.id,
-    sfDocumentId: uploaded.contentDocumentId,
+    sfDocumentId: contentDocumentId,
   };
 }
 
