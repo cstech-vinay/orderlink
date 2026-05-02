@@ -25,6 +25,7 @@ The dropshipping path requires: payment integration (Razorpay), GST invoicing, O
 - Static catalog of ~12 seed products across 8 sub-brands (matches design)
 - Multi-merchant price comparison UI (Amazon, Myntra, Nykaa) with per-merchant price/ETA/stock
 - Click-to-merchant flow with branded interstitial showing confirmed price + ETA
+- Product gallery includes an Instagram-style reel as the last slide (per-product, optional) — 9:14 vertical video, IG visual chrome (gradient avatar, handle, audio caption, side action stack, mute toggle, tap-to-play), auto-pause on navigation away, muted-by-default for autoplay compliance, marked in thumb strip with the IG-gradient "REEL" tag
 - Responsive: desktop ≥881px and mobile ≤880px (matches design breakpoints)
 - Fonts: Fraunces (display) + Plus Jakarta Sans (sans), via Google Fonts
 - Design palette: `#0E1430` deep navy, `#FF5A3C` accent coral, `#FFFDFA` cream bg, `#1A1F36` ink, `#6B7280` muted, 18px radius
@@ -100,7 +101,8 @@ src/
 │   ├── FeaturedGrid.tsx                # 12-col editorial mixed-size grid
 │   ├── FeaturedHero.tsx                # large dark card inside FeaturedGrid
 │   ├── ProductCard.tsx                 # 3 variants: default / tall / wide
-│   ├── ProductGallery.tsx              # thumbs + main image + arrows
+│   ├── ProductGallery.tsx              # thumbs + main image + arrows + reel-as-last-slide
+│   ├── ReelSlide.tsx                   # IG-style video panel: gradient avatar, handle, caption, side actions, mute toggle, big play
 │   ├── MerchantList.tsx                # "Best prices today" panel w/ per-merchant CTA
 │   ├── MerchantLogo.tsx                # inline branded badge for amazon/myntra/nykaa
 │   ├── ReviewSection.tsx               # tabs + rating histogram + review cards
@@ -150,6 +152,16 @@ export type Review = {
   body: string;
 };
 
+export type Reel = {
+  src: string;              // local path: /products/{slug}/reel.mp4
+  poster?: string;          // optional poster — defaults to images[0]
+  caption?: string;         // ≤120 chars, defaults to "Hands-on with the {title}…"
+  audioLabel?: string;      // line under handle, e.g. "Original audio · 1:24"
+  durationSec?: number;     // for the audio label, optional
+  likes?: string;           // display string e.g. "12.4K", optional
+  comments?: string;        // display string e.g. "482", optional
+};
+
 export type AffiliateProduct = {
   id: string;               // 'p1' | 'p2' | ...
   slug: string;             // URL slug — kebab-case of title
@@ -162,6 +174,7 @@ export type AffiliateProduct = {
   reviewCount: number;
   badge?: string;           // "Editor's pick" | "Bestseller" | etc.
   images: string[];         // hosted in /public/products/{slug}/ — NOT Unsplash CDN
+  reel?: Reel;              // optional IG-style reel — appended as last gallery slide
   summary: string;
   highlights: string[];
   specs: [string, string][];
@@ -172,6 +185,8 @@ export type AffiliateProduct = {
 ```
 
 **Image hosting:** the design uses Unsplash CDN URLs. We will NOT ship Unsplash URLs to production — they are unreliable as long-term hotlinks and not licensed for commercial use without verification. Migration plan: a one-time `scripts/download-seed-images.ts` (run manually, committed output) fetches the 12 seed images and writes them to `/public/products/{slug}/{n}.webp`. The catalog references local paths thereafter. If user wants different real product photos, they swap the files; catalog references stay stable.
+
+**Reel video hosting:** the design references Pixabay-CDN MP4 URLs as placeholder reels. Same rule — we will NOT hot-link Pixabay in production. The catalog's `Reel.src` always points to a local path under `/public/products/{slug}/reel.mp4`. The same migration script downloads the 4 unique placeholder clips from the design (mapped per category, since the design has 4 distinct videos used across 8 categories) and saves them as per-product files. Real Instagram reels are out of scope this phase — the user can later replace these MP4s with their own captures, or we revisit IG oEmbed/iframe in a future phase. Using a self-hosted `<video>` keeps us off Instagram's TOS surface and avoids third-party tracking on the page.
 
 ### Routing model
 
@@ -217,7 +232,7 @@ Components consume these via Tailwind utilities (`bg-ol-deep`, `text-ol-accent`,
 - Client Components (marked `'use client'`) only where needed:
   - `Header` (search input state)
   - `ListPage` filter UI (sort, category chips, price slider)
-  - `ProductGallery` (active image index)
+  - `ProductGallery` (active slide index, video play/pause/mute state, auto-pause-on-leave effect)
   - `ProductTabs` (overview/specs/reviews active tab)
   - `RedirectInterstitial` (countdown timer)
   - `WishlistHeart` (localStorage-backed, no server)
@@ -235,6 +250,7 @@ The prototype is the visual source of truth. When converting prototype JSX → r
 - Hover transitions (`translateY(-3px)`, scale, opacity) — these matter to the feel
 - The floating product card on the hero (rotated 4°)
 - The mixed-grid 12-col featured layout (span 6 + span 3 + span 3 + 4×span 4)
+- The reel-as-last-slide gallery integration: thumb gets the IG-gradient "REEL" badge + a play glyph overlay on a dimmed first-image still; main pane swaps to a 9:14 black panel with the IG chrome from the prototype (gradient avatar with "OL" inside a black circle, handle "orderlink", audio caption, side action stack with heart/comment/share, mute toggle, big center play button, slide dots shifted up to 76px from bottom while on reel); the active video pauses when the user clicks to a different slide
 - The radial-gradient accent on the hero and dark featured cards
 - The gradient italic text in the hero h1 (`color-mix` + `WebkitBackgroundClip:text`)
 - Mobile breakpoint at 880px (single-column gallery, footer becomes 2-col then 1-col)
@@ -267,6 +283,7 @@ Things we **change** from the prototype:
   - `ProductCard` renders all 3 variants
   - `RedirectInterstitial` countdown ticks down and fires redirect on completion
   - `Stars` renders correct filled/unfilled count for fractional ratings
+  - `ProductGallery` shows reel-thumb with REEL badge when product has reel; advancing past last image lands on reel slide; navigating away from reel pauses the `<video>` (mocked HTMLVideoElement)
 - E2E (Playwright):
   - Home → click category → click product → click merchant → land on interstitial
   - Mobile viewport (375px): same flow, gallery becomes column-reverse, footer collapses
@@ -290,6 +307,7 @@ Target: ≥20 tests total (unit + component + e2e). Visual diff is out of scope 
 ## 9. Performance
 
 - Images: self-hosted webp, lazy loading except first-screen hero, `priority` on home hero + first 4 cards
+- Reels: `preload="metadata"` (only metadata + poster fetched until user clicks thumb), `playsInline`, `loop`, muted by default; never autoplay on page load — only when user explicitly hits play; `<video>` element is conditionally rendered only when active slide is the reel, so off-screen reels are not in the DOM at all
 - Fonts: `display: swap`, preconnect already in design
 - All catalog pages are statically prerendered at build (no DB, no SSR fetches)
 - Lighthouse target: ≥95 perf, ≥95 a11y, ≥95 SEO on home and PDP
@@ -347,6 +365,8 @@ When the user does authorise deploy, the path is documented in memory `vps-deplo
 
 - No real merchant deeplinks. Placeholder URLs throughout.
 - No click attribution / outbound tracking.
+- No real Instagram reels — reel slides are self-hosted MP4s mimicking IG visual style. Real IG embed (oEmbed / iframe / Basic Display API) is a future phase.
+- No video upload UI. Reels are added by replacing the file at `/public/products/{slug}/reel.mp4` and committing.
 - No backend search or recommendations.
 - No user auth, accounts, or persisted wishlist beyond localStorage.
 - No CMS / admin / runtime catalog editing.
