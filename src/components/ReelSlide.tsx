@@ -23,7 +23,7 @@ export const ReelSlide = forwardRef<ReelHandle, Props>(function ReelSlide(
   useImperativeHandle(ref, () => ({
     pause: () => {
       const v = videoRef.current;
-      if (v && !v.paused) v.pause();
+      if (v) v.pause();
       setPlaying(false);
     },
   }), []);
