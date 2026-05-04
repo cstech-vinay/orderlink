@@ -7,13 +7,13 @@ const fraunces = Fraunces({
   display: "swap",
   weight: ["400", "500", "600", "700", "800"],
   style: ["normal", "italic"],
-  variable: "--font-display-loaded",
+  variable: "--font-display",
 });
 const jakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
   display: "swap",
   weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-sans-loaded",
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
