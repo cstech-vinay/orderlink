@@ -1,3 +1,13 @@
+import { Hero } from "@/components/Hero";
+import { CategoryStrip } from "@/components/CategoryStrip";
+import { FeaturedGrid } from "@/components/FeaturedGrid";
+
 export default function Home() {
-  return <main className="p-8">OrderLink — coming together.</main>;
+  return (
+    <>
+      <Hero />
+      <CategoryStrip />
+      <FeaturedGrid />
+    </>
+  );
 }
