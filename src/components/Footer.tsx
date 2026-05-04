@@ -1,3 +1,4 @@
+"use client";
 import Link from "next/link";
 import { categories } from "@/data/categories";
 

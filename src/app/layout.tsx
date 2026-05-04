@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import { Suspense } from "react";
+import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
 
 const fraunces = Fraunces({
   subsets: ["latin"],
@@ -42,7 +45,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${fraunces.variable} ${jakarta.variable}`}>
       <body className="bg-ol-bg text-ol-ink font-sans antialiased">
-        {children}
+        <Suspense fallback={null}>
+          <Header />
+        </Suspense>
+        <div className="max-w-[1280px] mx-auto px-6">
+          {children}
+        </div>
+        <Footer />
       </body>
     </html>
   );
