@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "download:seed-images": "tsx scripts/download-seed-images.ts",
+    "download:seed-reels": "tsx scripts/download-seed-reels.ts"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.49.0",
@@ -31,6 +33,7 @@
     "@vitest/coverage-v8": "^4.1.4",
     "jsdom": "^29.0.2",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^4.1.4"
   }
