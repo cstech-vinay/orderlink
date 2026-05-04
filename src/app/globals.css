@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ol-accent: #FF5A3C;
+  --color-ol-deep: #0E1430;
+  --color-ol-ink: #1A1F36;
+  --color-ol-muted: #6B7280;
+  --color-ol-bg: #FFFDFA;
+  --color-ol-soft: #F4F1EC;
+  --color-ol-success: #0E7C3A;
+  --color-ol-warn: #B45309;
+  --radius-ol: 18px;
+  --font-display: "Fraunces", "Times New Roman", serif;
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--color-ol-bg);
+  color: var(--color-ol-ink);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* selection */
+::selection { background: var(--color-ol-accent); color: #fff; }
+
+/* range slider — used in /shop price filter */
+input[type=range] {
+  -webkit-appearance: none;
+  height: 4px;
+  background: rgba(14, 20, 48, 0.12);
+  border-radius: 999px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--color-ol-accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* fade-in keyframe used by interstitial */
+@keyframes ol-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-ol-fade { animation: ol-fade 0.25s ease; }
